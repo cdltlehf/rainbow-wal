@@ -71,7 +71,7 @@ def get_primary_hue(
     target_hue: np.uint8,
     non_hue_weight: NDArray[np.float64],
     *,
-    alpha: float = 10
+    alpha: float
 ) -> np.uint8:
 
     hue_weight = get_hue_similarity(image_hue, target_hue)
@@ -87,7 +87,7 @@ def get_primary_color(
     primary_hue: np.uint8,
     non_hue_weight: NDArray[np.float64],
     *,
-    beta: float = 10,
+    beta: float
 ) -> NDArray[np.uint8]:
     hue, saturation, value = cv2.split(image)
 
@@ -117,7 +117,7 @@ def get_grey_colors(
     non_hue_weight: NDArray[np.float64],
     values: list[np.uint8],
     *,
-    gamma: float = 4,
+    gamma: float
 ) -> list[NDArray[np.uint8]]:
 
     normalized_values = [cast(np.float64, value) / 255 for value in values]
@@ -136,24 +136,19 @@ def get_grey_colors(
 
 def main(args: argparse.Namespace):
 
-    theme = {
-        "special": {
-            "background": "#000000",
-            "foreground": "#f5f5f7",
-            "cursor": "#f5f5f7"
-        },
-        "colors": {f"color{i}": "#ffffff" for i in range(16)}
-    }
-    theme["colors"]["color0"] = "#000000"
-    theme["colors"]["color7"] = "#ffffff"
-    theme["colors"]["color8"] = "#555555"
-    theme["colors"]["color15"] = "#ffffff"
-
+    theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
     filename = os.path.expanduser(args.filename)
+    output = os.path.expanduser(args.output)
     image = cv2.imread(filename)
-    # img = cv2.resize(img, dsize=(0, 0), fx=0.1, fy=0.1)
-    cv2.imshow('original', image)
+    target_size = 1280 * 1024
+    factor = target_size / image.size
+    if factor < 1:
+        image = cv2.resize(image, dsize=(0, 0), fx=factor, fy=factor)
     assert image is not None
+
+    alpha = args.alpha
+    beta = args.beta
+    gamma = args.gamma
 
     image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     hue, saturation, value = cv2.split(image_hsv)
@@ -163,26 +158,33 @@ def main(args: argparse.Namespace):
     non_hue_weight = saturation_weight * value_weight
 
     primary_hue = get_average_hue(hue, non_hue_weight)
-    values = cast(list[np.uint8], [24, 8, 128])
-    grey_colors = get_grey_colors(hue, primary_hue, non_hue_weight, values)
+    values = cast(list[np.uint8], [16, 24, 96])
+    grey_colors = get_grey_colors(
+        hue, primary_hue, non_hue_weight, values, gamma=gamma)
+    white = np.array([primary_hue, 4, 256 - 32], np.uint8)
+    bright_white = np.array([0, 0, 255], np.uint8)
 
     theme['special']['background'] = hsv_to_hex(grey_colors[0])
+    theme['special']['foreground'] = hsv_to_hex(white)
+    theme['special']['cursor'] = hsv_to_hex(white)
     theme['colors']['color0'] = hsv_to_hex(grey_colors[1])
+    theme['colors']['color7'] = hsv_to_hex(white)
     theme['colors']['color8'] = hsv_to_hex(grey_colors[2])
+    theme['colors']['color15'] = hsv_to_hex(bright_white)
 
     target_hues = cast(list[np.uint8], [0, 60, 30, 120, 150, 90])
     for i, target_hue in enumerate(target_hues, 1):
-        primary_hue = get_primary_hue(hue, target_hue, non_hue_weight)
-        color = get_primary_color(image_hsv, primary_hue, non_hue_weight)
-        color_bright = get_primary_color(
-            image_hsv, primary_hue, non_hue_weight, beta=100
-        )
+        primary_hue = get_primary_hue(
+            hue, target_hue, non_hue_weight, alpha=alpha)
+        color = get_primary_color(
+            image_hsv, primary_hue, non_hue_weight, beta=beta)
+        bright_color = get_primary_color(
+            image_hsv, primary_hue, non_hue_weight, beta=beta*10)
         theme['colors'][f'color{i}'] = hsv_to_hex(color)
-        theme['colors'][f'color{i+8}'] = hsv_to_hex(color_bright)
+        theme['colors'][f'color{i+8}'] = hsv_to_hex(bright_color)
 
-    output_path = '~/.config/wal/colorschemes/dark/custom.json'
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(os.path.expanduser(output_path), 'w') as f:
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(os.path.expanduser(output), 'w') as f:
         json.dump(theme, f)
 
 
@@ -192,6 +194,13 @@ if __name__ == "__main__":
         '--filename',
         default="~/dotfiles/wallpapers/Wallpaper-Orsay.default.jpg"
     )
+    parser.add_argument(
+        '--output',
+        default="~/.config/wal/colorschemes/dark/custom.json"
+    )
+    parser.add_argument('--alpha', default=10)
+    parser.add_argument('--beta', default=5)
+    parser.add_argument('--gamma', default=10)
 
     args = parser.parse_args()
     main(args)
