@@ -78,7 +78,12 @@ def get_primary_hue(
     hue_weight = np.power(hue_weight, alpha)
     weight_for_primary_hue = hue_weight * non_hue_weight
     primary_hue = get_average_hue(image_hue, weight_for_primary_hue)
-
+    hue_difference = cast(np.uint8, ((primary_hue - target_hue) + 180) % 180)
+    trim_boundary = 15
+    if trim_boundary < hue_difference and hue_difference <= 90:
+        primary_hue = (target_hue + trim_boundary) % 180
+    elif 90 < hue_difference and hue_difference < 180 - trim_boundary:
+        primary_hue = (target_hue + 180 - trim_boundary) % 180
     return primary_hue
 
 
