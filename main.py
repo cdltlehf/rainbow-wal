@@ -8,6 +8,18 @@ import numpy as np
 from numpy.typing import (NDArray, )
 
 
+BACKGROUND_VALUE = 16
+BLACK_VALUE = 24
+BRIGHT_BLACK_VALUE = 96
+
+WHITE_SATURATION = 4
+WHITE_VALUE = 256 - 32
+BRIGHT_WHITE_VALUE = 255
+
+MINIMUM_COLOR_VALUE = int(min(BACKGROUND_VALUE * 3 * 3.5, 255))
+BRIGHT_RATIO = 1.1
+
+
 def get_average(
     numbers: NDArray[np.float64],
     weights: Optional[NDArray[np.float64]] = None,
@@ -116,6 +128,21 @@ def hsv_to_hex(color: NDArray[np.uint8]) -> str:
     return color_hex
 
 
+def normalize_to_target_value(
+    color: NDArray[np.uint8],
+    target_value: np.uint8
+) -> NDArray[np.uint8]:
+    hue, saturation, value = color[0], color[1], color[2]
+    normalized_saturation = cast(np.float64, saturation) / 255
+    normalized_value = cast(np.float64, value) / 255
+    factor = int(normalized_saturation * normalized_value * 255)
+
+    target_saturation = int(min(factor/target_value, 1) * 255)
+    normalized_color = np.array(
+        [hue, target_saturation, target_value], np.uint8)
+    return normalized_color
+
+
 def get_grey_colors(
     image_hue: NDArray[np.uint8],
     primary_hue: np.uint8,
@@ -125,18 +152,11 @@ def get_grey_colors(
     gamma: float
 ) -> list[NDArray[np.uint8]]:
 
-    normalized_values = [cast(np.float64, value) / 255 for value in values]
     hue_weight = get_hue_similarity(image_hue, primary_hue)
-    factor = get_average(non_hue_weight, hue_weight) / gamma
+    factor = int(get_average(non_hue_weight, hue_weight) / gamma * 255)
 
-    saturations = [
-        min(float(factor/value), 1) * 255
-        for value in normalized_values
-    ]
-    return [
-        np.array([primary_hue, saturation, value], np.uint8)
-        for saturation, value in zip(saturations, values)
-    ]
+    color = np.array([primary_hue, 255, factor], np.uint8)
+    return [normalize_to_target_value(color, value) for value in values]
 
 
 def main(args: argparse.Namespace):
@@ -163,11 +183,12 @@ def main(args: argparse.Namespace):
     non_hue_weight = saturation_weight * value_weight
 
     primary_hue = get_average_hue(hue, non_hue_weight)
-    values = cast(list[np.uint8], [16, 24, 96])
+    values = cast(
+        list[np.uint8], [BACKGROUND_VALUE, BLACK_VALUE, BRIGHT_BLACK_VALUE])
     grey_colors = get_grey_colors(
         hue, primary_hue, non_hue_weight, values, gamma=gamma)
-    white = np.array([primary_hue, 4, 256 - 32], np.uint8)
-    bright_white = np.array([0, 0, 255], np.uint8)
+    white = np.array([primary_hue, WHITE_SATURATION, WHITE_VALUE], np.uint8)
+    bright_white = np.array([0, 0, BRIGHT_WHITE_VALUE], np.uint8)
 
     theme['special']['background'] = hsv_to_hex(grey_colors[0])
     theme['special']['foreground'] = hsv_to_hex(white)
@@ -183,8 +204,13 @@ def main(args: argparse.Namespace):
             hue, target_hue, non_hue_weight, alpha=alpha)
         color = get_primary_color(
             image_hsv, primary_hue, non_hue_weight, beta=beta)
-        bright_color = get_primary_color(
-            image_hsv, primary_hue, non_hue_weight, beta=beta*10)
+        value = color[2]
+        if value < MINIMUM_COLOR_VALUE:
+            color = normalize_to_target_value(color, MINIMUM_COLOR_VALUE)
+            value = MINIMUM_COLOR_VALUE
+        bright_color = (
+            normalize_to_target_value(color, min(255, value * BRIGHT_RATIO)))
+
         theme['colors'][f'color{i}'] = hsv_to_hex(color)
         theme['colors'][f'color{i+8}'] = hsv_to_hex(bright_color)
 
@@ -203,9 +229,29 @@ if __name__ == "__main__":
         '--output',
         default="~/.config/wal/colorschemes/dark/custom.json"
     )
-    parser.add_argument('--alpha', default=10)
-    parser.add_argument('--beta', default=5)
-    parser.add_argument('--gamma', default=10)
+    parser.add_argument(
+        '--alpha',
+        default=10,
+        help=(
+            "A weight for how much to extract hues based on the primary hue"
+        )
+    )
+    parser.add_argument(
+        '--beta',
+        default=5,
+        help=(
+            "A weight for how much to extract saturation and values "
+            "for the selected hue"
+        )
+    )
+    parser.add_argument(
+        '--gamma',
+        default=1,
+        help=(
+            "A weight for decreasing the hue of background, black and"
+            " bright black colors"
+        )
+    )
 
     args = parser.parse_args()
     main(args)
