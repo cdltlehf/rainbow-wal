@@ -221,13 +221,11 @@ def main(args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--filename',
-        default="~/dotfiles/wallpapers/Wallpaper-Orsay.default.jpg"
-    )
+    parser.add_argument('--filename')
     parser.add_argument(
         '--output',
-        default="~/.config/wal/colorschemes/dark/custom.json"
+        default="~/.config/wal/colorschemes/dark/custom.json",
+        help=("(default: ~/.config/wal/colorschemes/dark/custom.json)")
     )
     parser.add_argument(
         '--alpha',
