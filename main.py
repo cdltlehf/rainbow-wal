@@ -8,15 +8,16 @@ import numpy as np
 from numpy.typing import (NDArray, )
 
 
-BACKGROUND_VALUE = 16
-BLACK_VALUE = 24
-BRIGHT_BLACK_VALUE = 96
+SATURATION_WHITE: np.uint8 = 4
+SATURATION_BRIGHT_WHITE: np.uint8 = 0
 
-WHITE_SATURATION = 4
-WHITE_VALUE = 256 - 32
-BRIGHT_WHITE_VALUE = 255
+VALUE_BACKGROUND: np.uint8 = 16
+VALUE_BLACK: np.uint8 = 8
+VALUE_WHITE: np.uint8 = 256 - 32
+VALUE_BRIGHT_BLACK: np.uint8 = 96
+VALUE_BRIGHT_WHITE: np.uint8 = 255
 
-MINIMUM_COLOR_VALUE = int(min(BACKGROUND_VALUE * 3 * 3.5, 255))
+MINIMUM_VALUE_COLOR: np.uint8 = int(min(VALUE_BACKGROUND * 3 * 3.5, 255))
 BRIGHT_RATIO = 1.1
 
 
@@ -183,12 +184,16 @@ def main(args: argparse.Namespace):
     non_hue_weight = saturation_weight * value_weight
 
     primary_hue = get_average_hue(hue, non_hue_weight)
-    values = cast(
-        list[np.uint8], [BACKGROUND_VALUE, BLACK_VALUE, BRIGHT_BLACK_VALUE])
+    values = [
+        VALUE_BACKGROUND,
+        VALUE_BLACK,
+        VALUE_BRIGHT_BLACK,
+    ]
     grey_colors = get_grey_colors(
         hue, primary_hue, non_hue_weight, values, gamma=gamma)
-    white = np.array([primary_hue, WHITE_SATURATION, WHITE_VALUE], np.uint8)
-    bright_white = np.array([0, 0, BRIGHT_WHITE_VALUE], np.uint8)
+    print(grey_colors)
+    white = np.array([primary_hue, SATURATION_WHITE, VALUE_WHITE], np.uint8)
+    bright_white = np.array([0, 0, VALUE_BRIGHT_WHITE], np.uint8)
 
     theme['special']['background'] = hsv_to_hex(grey_colors[0])
     theme['special']['foreground'] = hsv_to_hex(white)
@@ -205,9 +210,9 @@ def main(args: argparse.Namespace):
         color = get_primary_color(
             image_hsv, primary_hue, non_hue_weight, beta=beta)
         value = color[2]
-        if value < MINIMUM_COLOR_VALUE:
-            color = normalize_to_target_value(color, MINIMUM_COLOR_VALUE)
-            value = MINIMUM_COLOR_VALUE
+        if value < MINIMUM_VALUE_COLOR:
+            color = normalize_to_target_value(color, MINIMUM_VALUE_COLOR)
+            value = MINIMUM_VALUE_COLOR
         bright_color = (
             normalize_to_target_value(color, min(255, value * BRIGHT_RATIO)))
 
@@ -244,9 +249,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--gamma',
-        default=1,
+        default=1.5,
         help=(
-            "A weight for decreasing the hue of background, black and"
+            "A weight for decreasing the saturations of background, black and"
             " bright black colors"
         )
     )
