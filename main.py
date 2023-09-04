@@ -1,10 +1,13 @@
 import argparse
 import json
 import os
+import tempfile
 from typing import (Optional, Union, cast, )
 
 import cv2
+import pyheif
 import numpy as np
+from PIL import Image
 from numpy.typing import (NDArray, )
 
 
@@ -160,12 +163,28 @@ def get_grey_colors(
     return [normalize_to_target_value(color, value) for value in values]
 
 
+def read_heic(filename: str) -> cv2.typing.MatLike:
+    _, tempname = tempfile.mkstemp(suffix='.jpg')
+    heif_file = pyheif.read(filename)
+    pil_image = Image.frombytes(
+        heif_file.mode, heif_file.size, heif_file.data,
+        "raw", heif_file.mode, heif_file.stride
+    )
+    pil_image.save(tempname)
+    image = cv2.imread(tempname)
+    os.remove(tempname)
+    return image
+
+
 def main(args: argparse.Namespace):
 
     theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
     filename = os.path.expanduser(args.filename)
     output = os.path.expanduser(args.output)
-    image = cv2.imread(filename)
+    if os.path.splitext(filename)[1] == '.heic':
+        image = read_heic(filename)
+    else:
+        image = cv2.imread(filename)
     target_size = 1280 * 1024
     factor = target_size / image.size
     if factor < 1:
