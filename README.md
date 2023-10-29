@@ -5,19 +5,13 @@ ANSI-16 colors (black, red, green, yellow, blue, magenta, cyan and white.)
 
 
 ```
-usage: main.py [-h] [--filename FILENAME] [--output OUTPUT] [--alpha ALPHA]
-               [--beta BETA] [--gamma GAMMA]
+usage: main.py [-h] [--filename FILENAME] [--output OUTPUT] [--debug]
 
 options:
   -h, --help           show this help message and exit
-  --filename FILENAME
+  --filename FILENAME  (default: ./resources/tuplips.png
   --output OUTPUT      (default: ~/.config/wal/colorschemes/dark/custom.json)
-  --alpha ALPHA        A weight for how much to extract hues based on the
-                       primary hue
-  --beta BETA          A weight for how much to extract saturation and values
-                       for the selected hue
-  --gamma GAMMA        A weight for decreasing the hue of background, black
-                       and bright black colors
+  --debug
 ```
 
 The result JSON file can be used as a theme for
