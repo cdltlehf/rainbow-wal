@@ -72,8 +72,10 @@ def get_circular_variance(
 def get_hue_weight(
     image_hue: NDArray[Radian],
     target_hue: Radian,
+    *,
+    factor: float = 1.0
 ) -> NDArray[np.float64]:
-    stddev = np.pi / 6
+    stddev = np.pi / 6 * factor
     kappa = 1 / np.power(stddev, 2)
     return np.array([vonmises.pdf(e, kappa, target_hue) for e in image_hue])
 
@@ -82,8 +84,10 @@ def get_palette_hue(
     image_hue: NDArray[Radian],
     target_hue: Radian,
     non_hue_weight: NDArray[np.float64],
+    *,
+    alpha: float
 ) -> Radian:
-    hue_weight = get_hue_weight(image_hue, target_hue)
+    hue_weight = get_hue_weight(image_hue, target_hue, factor=alpha)
     weight_for_palette_hue = hue_weight * non_hue_weight
     palette_hue = get_circular_average(image_hue, weight_for_palette_hue)
     hue_difference = palette_hue - target_hue
@@ -99,6 +103,8 @@ def get_palette_color(
     image: NDArray[np.uint8],
     palette_hue: Radian,
     non_hue_weight: NDArray[np.float64],
+    *,
+    beta: float
 ) -> NDArray[np.uint8]:
     _hue: np.uint8
     saturation: np.uint8
@@ -106,7 +112,7 @@ def get_palette_color(
     _hue, saturation, value = cv2.split(image)
     hue = np.radians(_hue, dtype=Radian)
 
-    palette_hue_weights = get_hue_weight(hue, palette_hue)
+    palette_hue_weights = get_hue_weight(hue, palette_hue, factor=beta)
     weights = palette_hue_weights * non_hue_weight
 
     average_saturation = np.average(saturation, weights=weights)
@@ -145,10 +151,12 @@ def get_grey_colors(
     primary_hue: np.float64,
     non_hue_weight: NDArray[np.float64],
     values: list[np.uint8],
+    *,
+    gamma: float
 ) -> list[NDArray[np.uint8]]:
 
     hue_weight = get_hue_weight(image_hue, primary_hue)
-    factor = int(np.average(non_hue_weight, weights=hue_weight) / 1.5 * 255)
+    factor = int(np.average(non_hue_weight, weights=hue_weight) * gamma * 255)
 
     color = np.array([np.degrees(primary_hue), 255, factor], np.uint8)
     return [normalize_to_target_value(color, value) for value in values]
@@ -182,6 +190,10 @@ def main(args: argparse.Namespace):
         image = cv2.resize(image, dsize=(0, 0), fx=factor, fy=factor)
     assert image is not None
 
+    alpha: float = args.alpha
+    beta: float = args.beta
+    gamma: float = args.gamma
+
     image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     _hue: NDArray[np.uint8]
     saturation: NDArray[np.uint8]
@@ -202,7 +214,8 @@ def main(args: argparse.Namespace):
         VALUE_BLACK,
         VALUE_BRIGHT_BLACK,
     ]
-    grey_colors = get_grey_colors(hue, primary_hue, non_hue_weight, values)
+    grey_colors = get_grey_colors(
+        hue, primary_hue, non_hue_weight, values, gamma=gamma)
     white = np.array([primary_hue, SATURATION_WHITE, VALUE_WHITE], np.uint8)
     bright_white = np.array([0, 0, VALUE_BRIGHT_WHITE], np.uint8)
 
@@ -220,8 +233,10 @@ def main(args: argparse.Namespace):
 
     target_hues = np.radians([0, 60, 30, 120, 150, 90], dtype=Radian)
     for i, target_hue in enumerate(target_hues, 1):
-        palette_hue = get_palette_hue(hue, target_hue, non_hue_weight)
-        color = get_palette_color(image_hsv, palette_hue, non_hue_weight)
+        palette_hue = get_palette_hue(
+            hue, target_hue, non_hue_weight, alpha=alpha)
+        color = get_palette_color(
+            image_hsv, palette_hue, non_hue_weight, beta=beta)
         _value: np.uint8 = color[2]
         if _value < MINIMUM_VALUE_COLOR:
             color = normalize_to_target_value(color, MINIMUM_VALUE_COLOR)
@@ -260,6 +275,30 @@ if __name__ == "__main__":
         '--output',
         default="~/.config/wal/colorschemes/dark/custom.json",
         help=("(default: ~/.config/wal/colorschemes/dark/custom.json)")
+    )
+    parser.add_argument(
+        '--alpha',
+        default=1.0,
+        help=(
+            "A stddev factor for the hue of palette color, "
+            "which is of the weight of colors around the primary hue"
+        )
+    )
+    parser.add_argument(
+        '--beta',
+        default=1.0,
+        help=(
+            "A stddev factor for the value and saturation of palette color, "
+            "which is of the weight of colors around the palette hue"
+        )
+    )
+    parser.add_argument(
+        '--gamma',
+        default=0.5,
+        help=(
+            "A weight for the saturations "
+            "of background, black and bright black colors"
+        )
     )
     parser.add_argument('--debug', action='store_true')
 
