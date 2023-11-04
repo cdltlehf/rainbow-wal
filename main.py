@@ -18,11 +18,10 @@ VALUE_BRIGHT_BLACK: np.uint8 = np.uint8(96)
 
 MINIMUM_VALUE_CHROMATIC_COLOR: np.uint8 = (
     np.uint8(min((VALUE_BACKGROUND + 8) * 7 - 8, 255)))
-MINIMUM_CHROMA_CHROMATIC_COLOR: float = 0.125
 BRIGHT_RATIO: float = 1.1
 
 MAXIMUM_IMAGE_SIZE: int = 1280 * 1024
-CHROMATIC_COLOR_WEIGHT_THRESHOLD: float = 0.01
+CHROMATIC_COLOR_WEIGHT_THRESHOLD: float = 1 / 128
 
 Radian = np.float64
 
@@ -236,15 +235,6 @@ def get_chromas(
     return chroma
 
 
-def get_saturation_from_chroma(chroma: float, value: np.uint8) -> np.uint8:
-    normalized_value = float(value) / 255
-
-    normalized_minimum_saturation = chroma / normalized_value
-    normalized_minimum_saturation = min(normalized_minimum_saturation, 1.0)
-    minimum_saturation = np.uint8(normalized_minimum_saturation * 255)
-    return minimum_saturation
-
-
 def main(args: argparse.Namespace) -> None:
     debug: bool = args.debug
 
@@ -308,14 +298,6 @@ def main(args: argparse.Namespace) -> None:
         bright_color = standardize_with_value(
             color, value_bright_chromatic_color)
 
-        minimum_saturation = get_saturation_from_chroma(
-            MINIMUM_CHROMA_CHROMATIC_COLOR, value_chromatic_color)
-        minimum_saturation_bright = get_saturation_from_chroma(
-            MINIMUM_CHROMA_CHROMATIC_COLOR, value_bright_chromatic_color)
-
-        color[1] = max(color[1], minimum_saturation)
-        bright_color[1] = max(bright_color[1], minimum_saturation_bright)
-
         palette[0][i] = hsv_to_rgb(color)
         palette[1][i] = hsv_to_rgb(bright_color)
 
@@ -365,7 +347,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--beta',
         type=float,
-        default=2,
+        default=4,
         help=(
             "A inverse-stddev factor "
             "for the value and the saturation of the palette, "
