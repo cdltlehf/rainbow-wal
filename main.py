@@ -21,14 +21,14 @@ MINIMUM_VALUE_CHROMATIC_COLOR: np.uint8 = (
 BRIGHT_RATIO: float = 1.1
 
 MAXIMUM_IMAGE_SIZE: int = 1280 * 1024
-CHROMATIC_COLOR_WEIGHT_THRESHOLD: float = 1 / 128
+CHROMA_WEIGHT_THRESHOLD: float = 1 / 8
 
 Radian = np.float64
 
 
 def get_default_palette() -> NDArray[np.uint8]:
     # https://developer.apple.com/design/human-interface-guidelines/color#macOS-system-colors
-    palette = np.zeros((2, 8, 3), dtype=np.uint8)
+    palette = np.zeros((2, 8, 3), np.uint8)
 
     palette[0][1] = np.array([255, 69, 58])
     palette[0][2] = np.array([50, 215, 75])
@@ -116,7 +116,7 @@ def get_hue_chromatic_color(
 ) -> Radian:
     hue_weights = get_hue_weights(image_hues, target_hue, factor=alpha)
     weights = hue_weights * chromas
-    if np.average(weights) < CHROMATIC_COLOR_WEIGHT_THRESHOLD:
+    if sum(weights.flatten()) == 0:
         return target_hue
     hue_chromatic_color = get_circular_average(image_hues, weights)
 
@@ -127,7 +127,7 @@ def get_hue_chromatic_color(
     elif hue_difference < -np.pi:
         hue_difference += np.pi
 
-    trim_boundary = np.pi / 12
+    trim_boundary = np.pi / 12 - np.pi / 48
     if hue_difference > trim_boundary:
         hue_chromatic_color = target_hue + trim_boundary
     elif hue_difference < -trim_boundary:
@@ -160,14 +160,14 @@ def get_chromatic_color(
 
     hue_weights = get_hue_weights(image_hues, hue_chromatic_color, factor=beta)
     weights = hue_weights * chromas
-    if np.average(weights) < CHROMATIC_COLOR_WEIGHT_THRESHOLD:
+    if sum(weights.flatten()) == 0:
         weights = primary_hue_weights * chromas
-    if np.average(weights) < CHROMATIC_COLOR_WEIGHT_THRESHOLD:
+    if sum(weights.flatten()) == 0:
         return None
     _saturation = np.average(image_saturations, weights=weights)
     _value = np.average(image_values, weights=weights)
     _hue = np.uint8(np.degrees(hue_chromatic_color))
-    color = np.array([_hue, _saturation, _value], dtype=np.uint8)
+    color = np.array([_hue, _saturation, _value], np.uint8)
     return color
 
 
@@ -177,22 +177,33 @@ def rgb_to_hex(color: NDArray[np.uint8]) -> str:
     return color_hex
 
 
+def get_chromas(
+    saturation: NDArray[np.uint8],
+    value: NDArray[np.uint8],
+) -> NDArray[np.float64]:
+    normalized_saturation = saturation.astype(np.float64) / 255
+    normalized_value = value.astype(np.float64) / 255
+    chromas = normalized_saturation * normalized_value
+    return chromas
+
+
 def standardize_with_value(
     color: NDArray[np.uint8],
     target_value: np.uint8
 ) -> NDArray[np.uint8]:
     hue, saturation, value = color[0], color[1], color[2]
 
-    normalized_saturation = saturation.astype(np.float64) / 255
-    normalized_value = value.astype(np.float64) / 255
-    chroma = normalized_saturation * normalized_value
+    chroma = get_chromas(
+        np.array([saturation], np.uint8),
+        np.array([value], np.uint8)
+    ).tolist()[0]
 
     normalized_target_value = float(target_value) / 255
     normalized_target_saturation = min(chroma / normalized_target_value, 1)
     target_saturation = np.uint8(normalized_target_saturation * 255)
 
     standardized_color = np.array(
-        [hue, target_saturation, target_value], dtype=np.uint8)
+        [hue, target_saturation, target_value], np.uint8)
     return standardized_color
 
 
@@ -225,16 +236,6 @@ def read_heic(filename: str):
     return image
 
 
-def get_chromas(
-    saturation: NDArray[np.uint8],
-    value: NDArray[np.uint8],
-) -> NDArray[np.float64]:
-    normalized_saturation = saturation.astype(np.float64) / 255
-    normalized_value = value.astype(np.float64) / 255
-    chroma = normalized_saturation * normalized_value
-    return chroma
-
-
 def main(args: argparse.Namespace) -> None:
     debug: bool = args.debug
 
@@ -257,7 +258,7 @@ def main(args: argparse.Namespace) -> None:
 
     _image_hsv = cv2.cvtColor(resized_image, cv2.COLOR_BGR2HSV)
     _image_hues, image_saturations, image_values = cv2.split(_image_hsv)
-    image_hues: NDArray[np.float64] = np.radians(_image_hues, dtype=np.float64)
+    image_hues = np.radians(_image_hues, dtype=np.float64)
     image_hsv = (image_hues, image_saturations, image_values)
 
     background_color: NDArray[np.uint8]
@@ -265,6 +266,8 @@ def main(args: argparse.Namespace) -> None:
     theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
 
     chromas = get_chromas(image_saturations, image_values)
+    chromas[chromas < CHROMA_WEIGHT_THRESHOLD] = 0
+
     primary_hue = get_circular_average(image_hues, chromas)
     values_achromatic_color = [
         VALUE_BACKGROUND, VALUE_BLACK, VALUE_BRIGHT_BLACK
@@ -315,7 +318,7 @@ def main(args: argparse.Namespace) -> None:
     if debug:
         plt.subplot(2, 1, 1)
         plt.axis("off")
-        plt.imshow(cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB))
+        plt.imshow(cv2.cvtColor(_image_hsv, cv2.COLOR_HSV2RGB))
 
         plt.subplot(2, 1, 2)
         plt.axis("off")
