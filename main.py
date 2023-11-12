@@ -21,7 +21,7 @@ CHROMA_THRESHOLD = 2 / 256
 CONTRAST_RATIO_CHROMATIC_COLOR = 7
 CONTRAST_RATIO_BRIGHT_BLACK = 4.5
 
-LIGHTNESS_BACKGROUND = 4 / 256
+LIGHTNESS_BACKGROUND = 8 / 256
 LIGHTNESS_BLACK = 1 / 256
 LIGHTNESS_BRIGHT_BLACK = (
     CONTRAST_RATIO_BRIGHT_BLACK * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
@@ -239,7 +239,7 @@ def main(
     alpha: float, beta: float, gamma: float,
     debug: bool,
 ) -> None:
-
+    output = os.path.expanduser(output)
     image_rgb = load_image(filename)
     _image_hsl = [
         [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
@@ -341,7 +341,7 @@ def main(
             theme['colors'][f'color{8 * i + j}'] = rgb_to_hex(palette[i][j])
 
     os.makedirs(os.path.dirname(output), exist_ok=True)
-    with open(os.path.expanduser(output), 'w') as f:
+    with open(output, 'w') as f:
         json.dump(theme, f)
 
     if debug:
