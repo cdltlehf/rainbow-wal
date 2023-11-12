@@ -21,7 +21,8 @@ MINIMUM_VALUE_CHROMATIC_COLOR: np.uint8 = (
 BRIGHT_RATIO: float = 1.1
 
 MAXIMUM_IMAGE_SIZE: int = 1280 * 1024
-CHROMA_WEIGHT_THRESHOLD: float = 1 / 8
+CHROMA_THRESHOLD: float = 1 / 128
+MINIMUM_CHROMA_CHROMATIC_COLOR: float = 1 / 16
 
 Radian = np.float64
 
@@ -148,9 +149,8 @@ def get_chromatic_color(
         NDArray[np.uint8],
         NDArray[np.uint8]
     ],
-    hue_chromatic_color: Radian,
     chromas: NDArray[np.float64],
-    primary_hue_weights: NDArray[np.float64],
+    hue_chromatic_color: Radian,
     *,
     beta: float
 ) -> Optional[NDArray[np.uint8]]:
@@ -160,13 +160,13 @@ def get_chromatic_color(
 
     hue_weights = get_hue_weights(image_hues, hue_chromatic_color, factor=beta)
     weights = hue_weights * chromas
-    if sum(weights.flatten()) == 0:
-        weights = primary_hue_weights * chromas
+
     if sum(weights.flatten()) == 0:
         return None
+
+    _hue = np.uint8(np.degrees(hue_chromatic_color))
     _saturation = np.average(image_saturations, weights=weights)
     _value = np.average(image_values, weights=weights)
-    _hue = np.uint8(np.degrees(hue_chromatic_color))
     color = np.array([_hue, _saturation, _value], np.uint8)
     return color
 
@@ -189,9 +189,11 @@ def get_chromas(
 
 def standardize_with_value(
     color: NDArray[np.uint8],
-    target_value: np.uint8
+    target_value: np.uint8,
 ) -> NDArray[np.uint8]:
     hue, saturation, value = color[0], color[1], color[2]
+    if value == target_value:
+        return color
 
     chroma = get_chromas(
         np.array([saturation], np.uint8),
@@ -207,19 +209,41 @@ def standardize_with_value(
     return standardized_color
 
 
+def standardize_chromatic_color(
+    color: NDArray[np.uint8],
+    bright: bool = False
+) -> NDArray[np.uint8]:
+    standardized_color = color.copy()
+
+    value = color[2]
+    target_value = max(value, MINIMUM_VALUE_CHROMATIC_COLOR)
+    if bright:
+        target_value = min(target_value * BRIGHT_RATIO, 255)
+
+    standardized_color[2] = target_value
+    normalized_value = float(standardized_color[2]) / 255
+    minimum_normalized_saturation = (
+        MINIMUM_CHROMA_CHROMATIC_COLOR / normalized_value)
+    minimum_saturation = int(minimum_normalized_saturation * 255)
+    minimum_saturation = min(minimum_saturation, 255)
+    standardized_color[1] = max(minimum_saturation, standardized_color[1])
+    return standardized_color
+
+
 def get_achromatic_colors(
-    primary_hue: np.float64,
-    primary_hue_weights: NDArray[np.float64],
+    image_hues: NDArray[np.float64],
+    hue: np.float64,
     chromas: NDArray[np.float64],
     values: list[np.uint8],
     *,
     gamma: float
 ) -> list[NDArray[np.uint8]]:
 
-    average_chroma = np.average(chromas, weights=primary_hue_weights)
-    _value = int(min(float(average_chroma) / gamma, 1) * 255)
+    hue_weights = get_hue_weights(image_hues, hue)
+    average_chroma = np.average(chromas, weights=hue_weights)
+    value = int(min(float(average_chroma) / gamma, 1) * 255)
 
-    color = np.array([np.degrees(primary_hue), 255, _value], np.uint8)
+    color = np.array([np.degrees(hue), 255, value], np.uint8)
     return [standardize_with_value(color, value) for value in values]
 
 
@@ -263,18 +287,17 @@ def main(args: argparse.Namespace) -> None:
 
     background_color: NDArray[np.uint8]
     palette = get_default_palette()
+    palette_debug = np.zeros_like(palette[:-1])
     theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
 
     chromas = get_chromas(image_saturations, image_values)
-    chromas[chromas < CHROMA_WEIGHT_THRESHOLD] = 0
 
-    primary_hue = get_circular_average(image_hues, chromas)
-    values_achromatic_color = [
+    hue_achromatic_color = get_circular_average(image_hues, chromas)
+    values_achromatic_colors = [
         VALUE_BACKGROUND, VALUE_BLACK, VALUE_BRIGHT_BLACK
     ]
-    primary_hue_weights = get_hue_weights(image_hues, primary_hue)
     achromatic_colors = get_achromatic_colors(
-        primary_hue, primary_hue_weights, chromas, values_achromatic_color,
+        image_hues, hue_achromatic_color, chromas, values_achromatic_colors,
         gamma=gamma
     )
 
@@ -282,26 +305,48 @@ def main(args: argparse.Namespace) -> None:
     palette[0][0] = hsv_to_rgb(achromatic_colors[1])
     palette[1][0] = hsv_to_rgb(achromatic_colors[2])
 
+    primary_hue_chromatic_color = (
+        get_circular_average(image_hues, chromas * chromas))
+    primary_chromatic_color = get_chromatic_color(
+            image_hsv, chromas, primary_hue_chromatic_color, beta=beta)
+    if primary_chromatic_color is not None:
+        chroma_primary_chromatic_color = get_chromas(
+            primary_chromatic_color[1:2], primary_chromatic_color[2:3])[0]
+        if chroma_primary_chromatic_color < CHROMA_THRESHOLD:
+            primary_chromatic_color = None
+    if primary_chromatic_color is not None:
+        palette_debug[0][0] = hsv_to_rgb(primary_chromatic_color)
+
+    base_chromatic_colors: list[Optional[NDArray[np.uint8]]] = []
     target_hues = np.radians([0, 60, 30, 120, 150, 90], dtype=Radian)
-    for i, target_hue in enumerate(target_hues, 1):
-        hue_chromatic_color = get_hue_chromatic_color(
-            image_hues, target_hue, chromas, alpha=alpha)
-        color = get_chromatic_color(
-            image_hsv, hue_chromatic_color, chromas, primary_hue_weights,
-            beta=beta
-        )
-        if color is None:
+    if primary_chromatic_color is not None:
+        for target_hue in target_hues:
+            hue_chromatic_color = get_hue_chromatic_color(
+                image_hues, target_hue, chromas, alpha=alpha)
+            base_chromatic_color = get_chromatic_color(
+                image_hsv, chromas, hue_chromatic_color, beta=beta)
+            base_chromatic_colors.append(base_chromatic_color)
+
+    for i, base_chromatic_color in enumerate(base_chromatic_colors, 1):
+        assert primary_chromatic_color is not None
+        if base_chromatic_color is None:
             continue
 
-        value_chromatic_color = max(color[2], MINIMUM_VALUE_CHROMATIC_COLOR)
-        value_bright_chromatic_color = min(
-            value_chromatic_color * BRIGHT_RATIO, 255)
+        chromatic_color = base_chromatic_color.copy()
+        chroma_chromatic_color = get_chromas(
+            chromatic_color[1:2], chromatic_color[2:3])[0]
+        if chroma_chromatic_color < MINIMUM_CHROMA_CHROMATIC_COLOR:
+            _chromatic_color = [
+                chromatic_color[0],
+                primary_chromatic_color[1],
+                primary_chromatic_color[2]
+            ]
+            chromatic_color = np.array(_chromatic_color, np.uint8)
+        chromatic_color = standardize_chromatic_color(chromatic_color)
+        bright_color = standardize_chromatic_color(chromatic_color, True)
 
-        color = standardize_with_value(color, value_chromatic_color)
-        bright_color = standardize_with_value(
-            color, value_bright_chromatic_color)
-
-        palette[0][i] = hsv_to_rgb(color)
+        palette_debug[0][i] = hsv_to_rgb(base_chromatic_color)
+        palette[0][i] = hsv_to_rgb(chromatic_color)
         palette[1][i] = hsv_to_rgb(bright_color)
 
     theme['special']['background'] = rgb_to_hex(background_color)
@@ -322,7 +367,7 @@ def main(args: argparse.Namespace) -> None:
 
         plt.subplot(2, 1, 2)
         plt.axis("off")
-        plt.imshow(palette)
+        plt.imshow(np.concatenate((palette_debug, palette)))
         plt.show()
 
 
