@@ -2,29 +2,51 @@ import argparse
 import json
 import os
 import tempfile
-from typing import (Optional, )
+from typing import (Optional, TypeVar, cast, )
 
 import cv2  # type: ignore
-import pyheif  # type: ignore
 import numpy as np
-from scipy.stats import vonmises  # type: ignore
+import pyheif  # type: ignore
 from PIL import Image  # type: ignore
-from numpy.typing import (NDArray, )
+from hsluv import hsluv_to_rgb as _hsluv_to_rgb  # type: ignore
+from hsluv import rgb_to_hsluv  # type: ignore
 from matplotlib import pyplot as plt  # type: ignore
+from numpy.typing import (NDArray, )
+from scipy.stats import vonmises  # type: ignore
 
-VALUE_BACKGROUND: np.uint8 = np.uint8(16)
-VALUE_BLACK: np.uint8 = np.uint8(8)
-VALUE_BRIGHT_BLACK: np.uint8 = np.uint8(96)
+CHROMA_THRESHOLD = 2 / 256
 
-MINIMUM_VALUE_CHROMATIC_COLOR: np.uint8 = (
-    np.uint8(min((VALUE_BACKGROUND + 8) * 7 - 8, 255)))
-BRIGHT_RATIO: float = 1.1
+# https://www.w3.org/TR/WCAG20/#contrast-ratiodef
+# we use lightness instead of luminance
+CONTRAST_RATIO_CHROMATIC_COLOR = 7
+CONTRAST_RATIO_BRIGHT_BLACK = 4.5
 
-MAXIMUM_IMAGE_SIZE: int = 1280 * 1024
-CHROMA_THRESHOLD: float = 1 / 128
-MINIMUM_CHROMA_CHROMATIC_COLOR: float = 1 / 16
+LIGHTNESS_BACKGROUND = 4 / 256
+LIGHTNESS_BLACK = 1 / 256
+LIGHTNESS_BRIGHT_BLACK = (
+    CONTRAST_RATIO_BRIGHT_BLACK * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
 
-Radian = np.float64
+MINIMUM_CHROMA_CHROMATIC_COLOR = 1 / 8
+MINIMUM_LIGHTNESS_CHROMATIC_COLOR = (
+    CONTRAST_RATIO_CHROMATIC_COLOR * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
+MAXIMUM_LIGHTNESS_CHROMATIC_COLOR = 1 - MINIMUM_CHROMA_CHROMATIC_COLOR * 0.5
+BRIGHT_RATIO = 1.1
+
+MAXIMUM_IMAGE_SIZE = 1280 * 1024 / 32
+
+
+Float = np.float_
+Radian = Float
+TFloat = TypeVar('TFloat', NDArray[Float], float)
+
+
+def hsl_to_rgb(_hsluv: NDArray[Float]) -> NDArray[np.uint8]:
+    hue = np.degrees(_hsluv[0])
+    saturation = min(max(_hsluv[1] * 100, 0), 100)
+    lightness = min(max(_hsluv[2] * 100, 0), 100)
+    hsluv = [hue, saturation, lightness]
+    _rgb = [min(max(0, int(e * 256)), 255) for e in _hsluv_to_rgb(hsluv)]
+    return np.array(_rgb, np.uint8)
 
 
 def get_default_palette() -> NDArray[np.uint8]:
@@ -50,25 +72,10 @@ def get_default_palette() -> NDArray[np.uint8]:
     return palette
 
 
-def hsv_to_rgb(color: NDArray[np.uint8]) -> NDArray[np.uint8]:
-    color_rgb = cv2.cvtColor(color.reshape((1, 1, 3)), cv2.COLOR_HSV2RGB)
-    return color_rgb[0][0]
-
-
-def get_average(
-    numbers: NDArray[np.float64],
-    weights: Optional[NDArray[np.float64]] = None,
-) -> float:
-    if weights is None:
-        weights = np.full_like(numbers, 1)
-    sum_weights = np.sum(weights)
-    return np.sum(numbers.astype(np.float64) * weights) / sum_weights
-
-
 def get_circular_average(
-    radians: NDArray[np.float64],
-    weights: Optional[NDArray[np.float64]] = None
-) -> np.float64:
+    radians: NDArray[Float],
+    weights: Optional[NDArray[Float]] = None
+) -> Float:
 
     if weights is None:
         weights = np.full_like(radians, 1)
@@ -80,49 +87,33 @@ def get_circular_average(
     return circular_average
 
 
-def get_circular_variance(
-    radians: NDArray[np.float64],
-    weights: Optional[NDArray[np.float64]] = None,
-    average: Optional[np.float64] = None,
-) -> np.float64:
-
-    if weights is None:
-        weights = np.full_like(radians, 1)
-
-    if average is None:
-        average = get_circular_average(radians, weights)
-
-    weighted_average = np.average(np.cos(radians - average), weights=weights)
-    circular_variance = 1 - weighted_average
-    return circular_variance
-
-
 def get_hue_weights(
-    image_hues: NDArray[Radian],
-    target_hue: Radian,
+    r_image_hues: NDArray[Radian],
+    r_target_hue: Radian,
     *,
     factor: float = 1.0
-) -> NDArray[np.float64]:
+) -> NDArray[Float]:
     stddev = np.pi / 6 / factor
     kappa = 1 / np.power(stddev, 2)
-    return np.array([vonmises.pdf(e, kappa, target_hue) for e in image_hues])
+    _weights = [vonmises.pdf(e, kappa, r_target_hue) for e in r_image_hues]
+    return np.array(_weights)
 
 
 def get_hue_chromatic_color(
-    image_hues: NDArray[Radian],
-    target_hue: Radian,
-    chromas: NDArray[np.float64],
+    r_image_hues: NDArray[Radian],
+    r_target_hue: Radian,
+    n_chromas: NDArray[Float],
     *,
     alpha: float
 ) -> Radian:
-    hue_weights = get_hue_weights(image_hues, target_hue, factor=alpha)
-    weights = hue_weights * chromas
+    hue_weights = get_hue_weights(r_image_hues, r_target_hue, factor=alpha)
+    weights = hue_weights * n_chromas
     if sum(weights.flatten()) == 0:
-        return target_hue
-    hue_chromatic_color = get_circular_average(image_hues, weights)
+        return r_target_hue
+    hue_chromatic_color = get_circular_average(r_image_hues, weights)
 
     # -np.pi < hue_difference < np.pi
-    hue_difference = hue_chromatic_color - target_hue
+    hue_difference = hue_chromatic_color - r_target_hue
     if hue_difference > np.pi:
         hue_difference -= np.pi
     elif hue_difference < -np.pi:
@@ -130,44 +121,49 @@ def get_hue_chromatic_color(
 
     trim_boundary = np.pi / 12 - np.pi / 48
     if hue_difference > trim_boundary:
-        hue_chromatic_color = target_hue + trim_boundary
+        hue_chromatic_color = r_target_hue + trim_boundary
     elif hue_difference < -trim_boundary:
-        hue_chromatic_color = target_hue - trim_boundary
-
-    # 0 <= hue_chromatic_color < 2 * pi
-    if hue_chromatic_color < 0:
-        hue_chromatic_color += 2 * np.pi
-    elif hue_chromatic_color > 2 * np.pi:
-        hue_chromatic_color -= 2 * np.pi
+        hue_chromatic_color = r_target_hue - trim_boundary
 
     return hue_chromatic_color
 
 
+def get_achromatic_colors(
+    r_image_hues: NDArray[Radian],
+    r_primary_hue: Radian,
+    n_chromas: NDArray[Float],
+    n_lightnesses: list[float],
+    *,
+    gamma: float
+) -> list[NDArray[Float]]:
+    hue_weights = get_hue_weights(r_image_hues, r_primary_hue)
+    n_chroma = np.average(n_chromas, weights=hue_weights) / gamma
+    base_color = np.array([r_primary_hue, n_chroma, 0.5])
+    return [
+        standardize_with_lightness(base_color, n_lightness)
+        for n_lightness in n_lightnesses
+    ]
+
+
 def get_chromatic_color(
-    image_hsv: tuple[
-        NDArray[np.float64],
-        NDArray[np.uint8],
-        NDArray[np.uint8]
-    ],
-    chromas: NDArray[np.float64],
-    hue_chromatic_color: Radian,
+    image_hsl_tuple: tuple[NDArray[Radian], NDArray[Float], NDArray[Float]],
+    n_chromas: NDArray[Float],
+    r_hue_chromatic_color: Radian,
     *,
     beta: float
-) -> Optional[NDArray[np.uint8]]:
+) -> Optional[NDArray[Float]]:
 
-    image_hues, image_saturations, image_values = image_hsv
-    _hue = np.uint8(np.degrees(hue_chromatic_color))
-
-    hue_weights = get_hue_weights(image_hues, hue_chromatic_color, factor=beta)
-    weights = hue_weights * chromas
+    r_image_hues, n_image_saturations, n_image_lightnesses = image_hsl_tuple
+    hue_weights = get_hue_weights(
+        r_image_hues, r_hue_chromatic_color, factor=beta)
+    weights = hue_weights * n_chromas
 
     if sum(weights.flatten()) == 0:
         return None
 
-    _hue = np.uint8(np.degrees(hue_chromatic_color))
-    _saturation = np.average(image_saturations, weights=weights)
-    _value = np.average(image_values, weights=weights)
-    color = np.array([_hue, _saturation, _value], np.uint8)
+    n_saturation = np.average(n_image_saturations, weights=weights)
+    n_lightness = np.average(n_image_lightnesses, weights=weights)
+    color = np.array([r_hue_chromatic_color, n_saturation, n_lightness])
     return color
 
 
@@ -177,74 +173,36 @@ def rgb_to_hex(color: NDArray[np.uint8]) -> str:
     return color_hex
 
 
-def get_chromas(
-    saturation: NDArray[np.uint8],
-    value: NDArray[np.uint8],
-) -> NDArray[np.float64]:
-    normalized_saturation = saturation.astype(np.float64) / 255
-    normalized_value = value.astype(np.float64) / 255
-    chromas = normalized_saturation * normalized_value
-    return chromas
+def get_chromas(n_saturations: TFloat, n_lightnesses: TFloat) -> TFloat:
+    n_chromas = n_saturations * np.absolute(1 - (2 * n_lightnesses - 1))
+    return n_chromas
 
 
-def standardize_with_value(
-    color: NDArray[np.uint8],
-    target_value: np.uint8,
-) -> NDArray[np.uint8]:
-    hue, saturation, value = color[0], color[1], color[2]
-    if value == target_value:
-        return color
-
-    chroma = get_chromas(
-        np.array([saturation], np.uint8),
-        np.array([value], np.uint8)
-    ).tolist()[0]
-
-    normalized_target_value = float(target_value) / 255
-    normalized_target_saturation = min(chroma / normalized_target_value, 1)
-    target_saturation = np.uint8(normalized_target_saturation * 255)
-
+def standardize_with_lightness(
+    color: NDArray[Float],
+    n_lightness: float,
+) -> NDArray[Float]:
+    n_chroma = get_chromas(color[1], color[2])
     standardized_color = np.array(
-        [hue, target_saturation, target_value], np.uint8)
+        [color[0], n_chroma / n_lightness, n_lightness])
     return standardized_color
 
 
 def standardize_chromatic_color(
-    color: NDArray[np.uint8],
+    color: NDArray[Float],
     bright: bool = False
-) -> NDArray[np.uint8]:
+) -> NDArray[Float]:
     standardized_color = color.copy()
 
-    value = color[2]
-    target_value = max(value, MINIMUM_VALUE_CHROMATIC_COLOR)
+    n_lightness = color[2]
+    n_target_lightness = max(n_lightness, MINIMUM_LIGHTNESS_CHROMATIC_COLOR)
+    n_target_lightness = min(
+        n_target_lightness, MAXIMUM_LIGHTNESS_CHROMATIC_COLOR)
     if bright:
-        target_value = min(target_value * BRIGHT_RATIO, 255)
+        n_target_lightness = n_target_lightness * BRIGHT_RATIO
 
-    standardized_color[2] = target_value
-    normalized_value = float(standardized_color[2]) / 255
-    minimum_normalized_saturation = (
-        MINIMUM_CHROMA_CHROMATIC_COLOR / normalized_value)
-    minimum_saturation = int(minimum_normalized_saturation * 255)
-    minimum_saturation = min(minimum_saturation, 255)
-    standardized_color[1] = max(minimum_saturation, standardized_color[1])
+    standardized_color = standardize_with_lightness(color, n_target_lightness)
     return standardized_color
-
-
-def get_achromatic_colors(
-    image_hues: NDArray[np.float64],
-    hue: np.float64,
-    chromas: NDArray[np.float64],
-    values: list[np.uint8],
-    *,
-    gamma: float
-) -> list[NDArray[np.uint8]]:
-
-    hue_weights = get_hue_weights(image_hues, hue)
-    average_chroma = np.average(chromas, weights=hue_weights)
-    value = int(min(float(average_chroma) / gamma, 1) * 255)
-
-    color = np.array([np.degrees(hue), 255, value], np.uint8)
-    return [standardize_with_value(color, value) for value in values]
 
 
 def read_heic(filename: str):
@@ -260,11 +218,8 @@ def read_heic(filename: str):
     return image
 
 
-def main(args: argparse.Namespace) -> None:
-    debug: bool = args.debug
-
-    filename = os.path.expanduser(args.filename)
-    output = os.path.expanduser(args.output)
+def load_image(filename: str) -> NDArray[Float]:
+    filename = os.path.expanduser(filename)
     if os.path.splitext(filename)[1] == '.heic':
         image = read_heic(filename)
     else:
@@ -275,60 +230,90 @@ def main(args: argparse.Namespace) -> None:
     else:
         resized_image = image
     assert resized_image is not None
+    image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+    return image
 
-    alpha: float = args.alpha
-    beta: float = args.beta
-    gamma: float = args.gamma
 
-    _image_hsv = cv2.cvtColor(resized_image, cv2.COLOR_BGR2HSV)
-    _image_hues, image_saturations, image_values = cv2.split(_image_hsv)
-    image_hues = np.radians(_image_hues, dtype=np.float64)
-    image_hsv = (image_hues, image_saturations, image_values)
+def main(
+    filename: str, output: str,
+    alpha: float, beta: float, gamma: float,
+    debug: bool,
+) -> None:
 
-    background_color: NDArray[np.uint8]
+    image_rgb = load_image(filename)
+    _image_hsl = [
+        [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
+        for rgbs in image_rgb
+    ]
+    # hue: 0~360, saturation: 0~100, lightness: 0~100
+    image_hsl = np.array(_image_hsl, float)
+    _image_hsl_tuple = cast(
+        tuple[NDArray[Float], NDArray[Float], NDArray[Float]],
+        tuple(np.transpose(image_hsl, axes=(2, 0, 1)))
+    )
+    image_hues, image_saturations, image_lightnesses = _image_hsl_tuple
+    r_image_hues = np.radians(image_hues)
+    n_image_saturations = image_saturations / 100
+    n_image_lightnesses = image_lightnesses / 100
+    n_image_chromas = get_chromas(n_image_saturations, n_image_lightnesses)
+    image_hsl_tuple = (r_image_hues, n_image_saturations, n_image_lightnesses)
+
+    # rgb
     palette = get_default_palette()
-    palette_debug = np.zeros_like(palette[:-1])
+    debug_palette = np.zeros((4, 8, 3), np.uint8)
+
+    # hex
     theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
 
-    chromas = get_chromas(image_saturations, image_values)
+    r_primary_hue = get_circular_average(r_image_hues, n_image_chromas)
+    debug_palette[0][0] = hsl_to_rgb(np.array([r_primary_hue, 1, 0.5]))
 
-    hue_achromatic_color = get_circular_average(image_hues, chromas)
-    values_achromatic_colors = [
-        VALUE_BACKGROUND, VALUE_BLACK, VALUE_BRIGHT_BLACK
+    lightnesses_achromatic_colors = [
+        LIGHTNESS_BACKGROUND, LIGHTNESS_BLACK, LIGHTNESS_BRIGHT_BLACK
     ]
     achromatic_colors = get_achromatic_colors(
-        image_hues, hue_achromatic_color, chromas, values_achromatic_colors,
+        r_image_hues, r_primary_hue, n_image_chromas,
+        lightnesses_achromatic_colors,
         gamma=gamma
     )
 
-    background_color = hsv_to_rgb(achromatic_colors[0])
-    palette[0][0] = hsv_to_rgb(achromatic_colors[1])
-    palette[1][0] = hsv_to_rgb(achromatic_colors[2])
+    background_color = hsl_to_rgb(achromatic_colors[0])
+    palette[0][0] = hsl_to_rgb(achromatic_colors[1])
+    palette[1][0] = hsl_to_rgb(achromatic_colors[2])
 
-    primary_hue_chromatic_color = (
-        get_circular_average(image_hues, chromas * chromas))
-    primary_chromatic_color = get_chromatic_color(
-            image_hsv, chromas, primary_hue_chromatic_color, beta=beta)
-    if primary_chromatic_color is not None:
-        chroma_primary_chromatic_color = get_chromas(
-            primary_chromatic_color[1:2], primary_chromatic_color[2:3])[0]
-        if chroma_primary_chromatic_color < CHROMA_THRESHOLD:
-            primary_chromatic_color = None
-    if primary_chromatic_color is not None:
-        palette_debug[0][0] = hsv_to_rgb(primary_chromatic_color)
+    primary_color = get_chromatic_color(
+        image_hsl_tuple, n_image_chromas, r_primary_hue, beta=beta)
+    if primary_color is not None:
+        n_primary_chroma = get_chromas(primary_color[1], primary_color[2])
+        if n_primary_chroma < CHROMA_THRESHOLD:
+            primary_color = None
+    if primary_color is not None:
+        debug_palette[1][0] = hsl_to_rgb(primary_color)
+        debug_palette[2][0] = hsl_to_rgb(primary_color)
 
-    base_chromatic_colors: list[Optional[NDArray[np.uint8]]] = []
-    target_hues = np.radians([0, 60, 30, 120, 150, 90], dtype=Radian)
-    if primary_chromatic_color is not None:
-        for target_hue in target_hues:
-            hue_chromatic_color = get_hue_chromatic_color(
-                image_hues, target_hue, chromas, alpha=alpha)
+    base_chromatic_colors: list[Optional[NDArray[Float]]] = []
+    if primary_color is not None:
+        # NOTE: red is at 12 deg
+        r_target_hues = np.radians(
+            np.array([0, 120, 60, 240, 300, 180]) + 12, dtype=Radian)
+        for i, r_target_hue in enumerate(r_target_hues, 1):
+            r_hue_chromatic_color = get_hue_chromatic_color(
+                r_image_hues, r_target_hue, n_image_chromas, alpha=alpha)
             base_chromatic_color = get_chromatic_color(
-                image_hsv, chromas, hue_chromatic_color, beta=beta)
+                image_hsl_tuple,
+                n_image_chromas,
+                r_hue_chromatic_color,
+                beta=beta
+            )
             base_chromatic_colors.append(base_chromatic_color)
+            debug_palette[0][i] = hsl_to_rgb(np.array([r_target_hue, 1, 0.5]))
+            debug_palette[1][i] = hsl_to_rgb(
+                np.array([r_hue_chromatic_color, 1, 0.5]))
+            if base_chromatic_color is not None:
+                debug_palette[2][i] = hsl_to_rgb(base_chromatic_color)
 
     for i, base_chromatic_color in enumerate(base_chromatic_colors, 1):
-        assert primary_chromatic_color is not None
+        assert primary_color is not None
         if base_chromatic_color is None:
             continue
 
@@ -338,16 +323,15 @@ def main(args: argparse.Namespace) -> None:
         if chroma_chromatic_color < MINIMUM_CHROMA_CHROMATIC_COLOR:
             _chromatic_color = [
                 chromatic_color[0],
-                primary_chromatic_color[1],
-                primary_chromatic_color[2]
+                primary_color[1],
+                primary_color[2]
             ]
-            chromatic_color = np.array(_chromatic_color, np.uint8)
+            chromatic_color = np.array(_chromatic_color)
         chromatic_color = standardize_chromatic_color(chromatic_color)
         bright_color = standardize_chromatic_color(chromatic_color, True)
 
-        palette_debug[0][i] = hsv_to_rgb(base_chromatic_color)
-        palette[0][i] = hsv_to_rgb(chromatic_color)
-        palette[1][i] = hsv_to_rgb(bright_color)
+        palette[0][i] = hsl_to_rgb(chromatic_color)
+        palette[1][i] = hsl_to_rgb(bright_color)
 
     theme['special']['background'] = rgb_to_hex(background_color)
     theme['special']['foreground'] = rgb_to_hex(palette[0][7])
@@ -363,11 +347,11 @@ def main(args: argparse.Namespace) -> None:
     if debug:
         plt.subplot(2, 1, 1)
         plt.axis("off")
-        plt.imshow(cv2.cvtColor(_image_hsv, cv2.COLOR_HSV2RGB))
+        plt.imshow(image_rgb)
 
         plt.subplot(2, 1, 2)
         plt.axis("off")
-        plt.imshow(np.concatenate((palette_debug, palette)))
+        plt.imshow(np.concatenate((debug_palette, palette)))
         plt.show()
 
 
@@ -395,23 +379,23 @@ if __name__ == "__main__":
     parser.add_argument(
         '--beta',
         type=float,
-        default=4,
+        default=8,
         help=(
             "A inverse-stddev factor "
-            "for the value and the saturation of the palette, "
+            "for saturation and lightness of the palette, "
             "which is of the weight of colors around the palette hue"
         )
     )
     parser.add_argument(
         '--gamma',
         type=float,
-        default=2,
+        default=8,
         help=(
-            "A inverse-weight for the saturations "
+            "A inverse-weight for the chroma "
             "of background, black and bright black colors"
         )
     )
     parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
-    main(args)
+    main(**vars(args))
