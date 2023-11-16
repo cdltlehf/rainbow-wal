@@ -1,23 +1,26 @@
 import argparse
-import json
 import os
 import tempfile
-from typing import (Optional, TypeVar, cast, )
+from typing import (Optional, TypeVar, TypedDict, cast, )
 
 import cv2  # type: ignore
 import numpy as np
 import pyheif  # type: ignore
+import pywal  # type: ignore
 from PIL import Image  # type: ignore
 from hsluv import hsluv_to_rgb as _hsluv_to_rgb  # type: ignore
 from hsluv import rgb_to_hsluv  # type: ignore
-from matplotlib import pyplot as plt  # type: ignore
 from numpy.typing import (NDArray, )
 from scipy.stats import vonmises  # type: ignore
+
+DEFAULT_ALPHA = 2.
+DEFAULT_BETA = 8.
+DEFAULT_GAMMA = 0.5
 
 CHROMA_THRESHOLD = 2 / 256
 
 # https://www.w3.org/TR/WCAG20/#contrast-ratiodef
-# we use lightness instead of luminance
+# we use the lightness instead of the luminance
 CONTRAST_RATIO_CHROMATIC_COLOR = 7
 CONTRAST_RATIO_BRIGHT_BLACK = 4.5
 
@@ -26,13 +29,20 @@ LIGHTNESS_BLACK = 1 / 256
 LIGHTNESS_BRIGHT_BLACK = (
     CONTRAST_RATIO_BRIGHT_BLACK * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
 
-MINIMUM_CHROMA_CHROMATIC_COLOR = 1 / 8
+MINIMUM_CHROMA_CHROMATIC_COLOR = 3 / 8
 MINIMUM_LIGHTNESS_CHROMATIC_COLOR = (
     CONTRAST_RATIO_CHROMATIC_COLOR * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
 MAXIMUM_LIGHTNESS_CHROMATIC_COLOR = 1 - MINIMUM_CHROMA_CHROMATIC_COLOR * 0.5
 BRIGHT_RATIO = 1.1
 
 MAXIMUM_IMAGE_SIZE = 1280 * 1024 / 32
+
+
+class Colors(TypedDict):
+    wallpaper: str
+    alpha: str
+    special: dict[str, str]
+    colors: dict[str, str]
 
 
 Float = np.float_
@@ -49,7 +59,7 @@ def hsl_to_rgb(_hsluv: NDArray[Float]) -> NDArray[np.uint8]:
     return np.array(_rgb, np.uint8)
 
 
-def get_default_palette() -> NDArray[np.uint8]:
+def get_default_colors() -> NDArray[np.uint8]:
     # https://developer.apple.com/design/human-interface-guidelines/color#macOS-system-colors
     palette = np.zeros((2, 8, 3), np.uint8)
 
@@ -131,16 +141,15 @@ def get_hue_chromatic_color(
 def get_achromatic_colors(
     r_image_hues: NDArray[Radian],
     r_primary_hue: Radian,
-    n_chromas: NDArray[Float],
+    n_saturations: NDArray[Float],
     n_lightnesses: list[float],
     *,
     gamma: float
 ) -> list[NDArray[Float]]:
     hue_weights = get_hue_weights(r_image_hues, r_primary_hue)
-    n_chroma = np.average(n_chromas, weights=hue_weights) / gamma
-    base_color = np.array([r_primary_hue, n_chroma, 0.5])
+    n_saturation = np.average(n_saturations, weights=hue_weights) * gamma
     return [
-        standardize_with_lightness(base_color, n_lightness)
+        np.array([r_primary_hue, n_saturation, n_lightness])
         for n_lightness in n_lightnesses
     ]
 
@@ -156,7 +165,7 @@ def get_chromatic_color(
     r_image_hues, n_image_saturations, n_image_lightnesses = image_hsl_tuple
     hue_weights = get_hue_weights(
         r_image_hues, r_hue_chromatic_color, factor=beta)
-    weights = hue_weights * n_chromas
+    weights = hue_weights * n_chromas ** 2
 
     if sum(weights.flatten()) == 0:
         return None
@@ -167,24 +176,46 @@ def get_chromatic_color(
     return color
 
 
-def rgb_to_hex(color: NDArray[np.uint8]) -> str:
-    r, g, b = tuple(color.tolist())
+def rgb_to_hex(color_rgb: NDArray[np.uint8]) -> str:
+    r, g, b = tuple(color_rgb.tolist())
     color_hex = "#{:02x}{:02x}{:02x}".format(r, g, b)
     return color_hex
 
 
+def get_lighteness_factor(n_lightnesses: TFloat) -> TFloat:
+    return 1 - np.absolute(2 * n_lightnesses - 1)
+
+
 def get_chromas(n_saturations: TFloat, n_lightnesses: TFloat) -> TFloat:
-    n_chromas = n_saturations * np.absolute(1 - (2 * n_lightnesses - 1))
+    lightness_factor = get_lighteness_factor(n_lightnesses)
+    n_chromas = n_saturations * lightness_factor
     return n_chromas
+
+
+def get_chroma(color: NDArray[Float]) -> Float:
+    lightness_factor = get_lighteness_factor(color[2])
+    n_chromas = color[1] * lightness_factor
+    return n_chromas
+
+
+def print_color(color: NDArray[Float]):
+    n_chroma = get_chroma(color)
+    print(
+        f'h: {np.degrees(color[0])}, '
+        f's: {color[1]}, '
+        f'l: {color[2]}, '
+        f'chroma: {n_chroma}'
+    )
 
 
 def standardize_with_lightness(
     color: NDArray[Float],
     n_lightness: float,
 ) -> NDArray[Float]:
-    n_chroma = get_chromas(color[1], color[2])
-    standardized_color = np.array(
-        [color[0], n_chroma / n_lightness, n_lightness])
+    n_chroma = get_chroma(color)
+    lightness_factor = get_lighteness_factor(n_lightness)
+    n_saturation = n_chroma / lightness_factor
+    standardized_color = np.array([color[0], n_saturation, n_lightness])
     return standardized_color
 
 
@@ -234,13 +265,12 @@ def load_image(filename: str) -> NDArray[Float]:
     return image
 
 
-def main(
-    filename: str, output: str,
-    alpha: float, beta: float, gamma: float,
-    debug: bool,
-) -> None:
-    output = os.path.expanduser(output)
-    image_rgb = load_image(filename)
+def _get_palettes(
+    image_rgb: NDArray[Float],
+    alpha: float = DEFAULT_ALPHA,
+    beta: float = DEFAULT_BETA,
+    gamma: float = DEFAULT_GAMMA,
+) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
     _image_hsl = [
         [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
         for rgbs in image_rgb
@@ -259,11 +289,8 @@ def main(
     image_hsl_tuple = (r_image_hues, n_image_saturations, n_image_lightnesses)
 
     # rgb
-    palette = get_default_palette()
-    debug_palette = np.zeros((4, 8, 3), np.uint8)
-
-    # hex
-    theme: dict[str, dict[str, str]] = {"special": {}, "colors": {}}
+    palette = get_default_colors()
+    debug_palette = np.zeros((5, 8, 3), np.uint8)
 
     r_primary_hue = get_circular_average(r_image_hues, n_image_chromas)
     debug_palette[0][0] = hsl_to_rgb(np.array([r_primary_hue, 1, 0.5]))
@@ -272,24 +299,26 @@ def main(
         LIGHTNESS_BACKGROUND, LIGHTNESS_BLACK, LIGHTNESS_BRIGHT_BLACK
     ]
     achromatic_colors = get_achromatic_colors(
-        r_image_hues, r_primary_hue, n_image_chromas,
+        r_image_hues, r_primary_hue, n_image_saturations,
         lightnesses_achromatic_colors,
         gamma=gamma
     )
 
-    background_color = hsl_to_rgb(achromatic_colors[0])
     palette[0][0] = hsl_to_rgb(achromatic_colors[1])
     palette[1][0] = hsl_to_rgb(achromatic_colors[2])
 
     primary_color = get_chromatic_color(
         image_hsl_tuple, n_image_chromas, r_primary_hue, beta=beta)
+    n_primary_chroma = None
     if primary_color is not None:
-        n_primary_chroma = get_chromas(primary_color[1], primary_color[2])
+        n_primary_chroma = get_chroma(primary_color)
         if n_primary_chroma < CHROMA_THRESHOLD:
             primary_color = None
     if primary_color is not None:
         debug_palette[1][0] = hsl_to_rgb(primary_color)
-        debug_palette[2][0] = hsl_to_rgb(primary_color)
+
+    background_color = hsl_to_rgb(achromatic_colors[0])
+    debug_palette[2][0] = background_color
 
     base_chromatic_colors: list[Optional[NDArray[Float]]] = []
     if primary_color is not None:
@@ -318,41 +347,75 @@ def main(
             continue
 
         chromatic_color = base_chromatic_color.copy()
-        chroma_chromatic_color = get_chromas(
-            chromatic_color[1:2], chromatic_color[2:3])[0]
-        if chroma_chromatic_color < MINIMUM_CHROMA_CHROMATIC_COLOR:
-            _chromatic_color = [
-                chromatic_color[0],
-                primary_color[1],
-                primary_color[2]
-            ]
-            chromatic_color = np.array(_chromatic_color)
+        hue = chromatic_color[0]
+        n_chroma_chromatic_color = get_chroma(chromatic_color)
+
+        if n_chroma_chromatic_color < CHROMA_THRESHOLD:
+            chromatic_color = np.array(
+                [hue, primary_color[1], primary_color[2]])
+        debug_palette[3][i] = hsl_to_rgb(chromatic_color)
+
+        if n_chroma_chromatic_color < MINIMUM_CHROMA_CHROMATIC_COLOR:
+            lightness = chromatic_color[2]
+            lightness_factor = get_lighteness_factor(lightness)
+            saturation = MINIMUM_CHROMA_CHROMATIC_COLOR / lightness_factor
+            chromatic_color = np.array([hue, saturation, lightness])
+        debug_palette[4][i] = hsl_to_rgb(chromatic_color)
+
+
         chromatic_color = standardize_chromatic_color(chromatic_color)
         bright_color = standardize_chromatic_color(chromatic_color, True)
 
         palette[0][i] = hsl_to_rgb(chromatic_color)
         palette[1][i] = hsl_to_rgb(bright_color)
 
-    theme['special']['background'] = rgb_to_hex(background_color)
-    theme['special']['foreground'] = rgb_to_hex(palette[0][7])
-    theme['special']['cursor'] = rgb_to_hex(palette[0][7])
+    return palette, debug_palette
+
+
+def get_colors(
+    filename: str,
+    alpha: float = DEFAULT_ALPHA,
+    beta: float = DEFAULT_BETA,
+    gamma: float = DEFAULT_GAMMA,
+) -> Colors:
+
+    image = load_image(filename)
+    wallpaper = os.path.basename(filename)
+    palette, debug_palette = _get_palettes(image, alpha, beta, gamma)
+    background_color = debug_palette[2][0]
+
+    # hex
+    colors = Colors(wallpaper=wallpaper, alpha='100', special={}, colors={})
+    colors['special']['background'] = rgb_to_hex(background_color)
+    colors['special']['foreground'] = rgb_to_hex(palette[0][7])
+    colors['special']['cursor'] = rgb_to_hex(palette[0][7])
+
     for i in range(2):
         for j in range(8):
-            theme['colors'][f'color{8 * i + j}'] = rgb_to_hex(palette[i][j])
+            colors['colors'][f'color{8 * i + j}'] = rgb_to_hex(palette[i][j])
+    return colors
 
-    os.makedirs(os.path.dirname(output), exist_ok=True)
-    with open(output, 'w') as f:
-        json.dump(theme, f)
 
-    if debug:
-        plt.subplot(2, 1, 1)
-        plt.axis("off")
-        plt.imshow(image_rgb)
+def _test(filename: str, alpha: float, beta: float, gamma: float) -> None:
+    from matplotlib import pyplot as plt  # type: ignore
 
-        plt.subplot(2, 1, 2)
-        plt.axis("off")
-        plt.imshow(np.concatenate((debug_palette, palette)))
-        plt.show()
+    image = load_image(filename)
+    palette, debug_palette = _get_palettes(image, alpha, beta, gamma)
+    plt.subplot(2, 1, 1)
+    plt.axis("off")
+    plt.imshow(image)
+
+    plt.subplot(2, 1, 2)
+    plt.axis("off")
+    plt.imshow(np.concatenate((debug_palette, palette)))
+    plt.show()
+
+
+def main(args) -> None:
+    colors = get_colors(args.filename, args.alpha, args.beta, args.gamma)
+    pywal.wallpaper.change(colors["wallpaper"])
+    pywal.sequences.send(colors, to_send=not args.s, vte_fix=args.vte)
+    pywal.export.every(colors)
 
 
 if __name__ == "__main__":
@@ -360,42 +423,49 @@ if __name__ == "__main__":
     parser.add_argument(
         '--filename',
         default='./resources/tulips.png',
-        help=("(default: ./resources/tuplips.png")
-    )
-    parser.add_argument(
-        '--output',
-        default="~/.config/wal/colorschemes/dark/custom.json",
-        help=("(default: ~/.config/wal/colorschemes/dark/custom.json)")
+        help=("(default: ./resources/tuplips.png)")
     )
     parser.add_argument(
         '--alpha',
         type=float,
-        default=2,
+        default=DEFAULT_ALPHA,
         help=(
             "A inverse-stddev factor for the hue of the palette, "
-            "which is of the weight of colors around the primary hue"
+            "which is of the weight of colors around the primary hue."
         )
     )
     parser.add_argument(
         '--beta',
         type=float,
-        default=8,
+        default=DEFAULT_BETA,
         help=(
             "A inverse-stddev factor "
             "for saturation and lightness of the palette, "
-            "which is of the weight of colors around the palette hue"
+            "which is of the weight of colors around the palette hue."
         )
     )
     parser.add_argument(
         '--gamma',
         type=float,
-        default=8,
+        default=DEFAULT_GAMMA,
         help=(
-            "A inverse-weight for the chroma "
-            "of background, black and bright black colors"
+            "A weight for the saturation "
+            "of background, black and bright black colors."
         )
     )
+    parser.add_argument(
+        '-s', action='store_true',
+        help="Skip changing colors in terminals. (Pywal option)"
+    )
+    parser.add_argument(
+        '--vte',
+        action='store_true',
+        help="Fix text-artifacts printed in VTE terminals. (Pywal option)"
+    )
     parser.add_argument('--debug', action='store_true')
-
     args = parser.parse_args()
-    main(**vars(args))
+
+    if args.debug:
+        _test(args.filename, args.alpha, args.beta, args.gamma)
+        exit(0)
+    main(args)
