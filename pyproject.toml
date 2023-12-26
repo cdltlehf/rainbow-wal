@@ -1,2 +1,30 @@
-[tool.mypy]
-plugins = ['numpy.typing.mypy_plugin']
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools"]
+
+[project]
+name = "rainbow-wal"
+version = "0.0.0"
+# description = "{{description}}"
+# readme = "README.md"
+# requires-python = ">=3.9"
+# license = {file = "LICENSE"}
+# authors = [
+#   {name = "{{name}}", email = "{{email}}"},
+# ]
+# maintainers = [
+#   {name = "{{name}}", email = "{{email}}"}
+# ]
+dependencies = [
+  "Pillow==10.0.0",
+  "hsluv==5.0.4",
+  "matplotlib==3.7.2",
+  "numpy==1.25.2",
+  "opencv-python==4.8.0.76",
+  "pyheif @ git+https://github.com/carsales/pyheif.git@2eaefe983acc01d52ca6b0094d986739cd7b32a5",
+  "pywal @ git+https://github.com/dylanaraps/pywal",
+  "scipy==1.11.3",
+]
+
+[project.scripts]
+rainbow_wal = "rainbow_wal.__main__:main"

@@ -1,4 +1,3 @@
-import argparse
 import os
 import tempfile
 from typing import (Optional, TypeVar, TypedDict, cast, )
@@ -6,7 +5,6 @@ from typing import (Optional, TypeVar, TypedDict, cast, )
 import cv2  # type: ignore
 import numpy as np
 import pyheif  # type: ignore
-import pywal  # type: ignore
 from PIL import Image  # type: ignore
 from hsluv import hsluv_to_rgb as _hsluv_to_rgb  # type: ignore
 from hsluv import rgb_to_hsluv  # type: ignore
@@ -15,7 +13,7 @@ from scipy.stats import vonmises  # type: ignore
 
 DEFAULT_ALPHA = 2.
 DEFAULT_BETA = 8.
-DEFAULT_GAMMA = 0.5
+DEFAULT_GAMMA = 1.
 
 CHROMA_THRESHOLD = 2 / 256
 
@@ -265,7 +263,7 @@ def load_image(filename: str) -> NDArray[Float]:
     return image
 
 
-def _get_palettes(
+def get_palettes(
     image_rgb: NDArray[Float],
     alpha: float = DEFAULT_ALPHA,
     beta: float = DEFAULT_BETA,
@@ -362,7 +360,6 @@ def _get_palettes(
             chromatic_color = np.array([hue, saturation, lightness])
         debug_palette[4][i] = hsl_to_rgb(chromatic_color)
 
-
         chromatic_color = standardize_chromatic_color(chromatic_color)
         bright_color = standardize_chromatic_color(chromatic_color, True)
 
@@ -381,7 +378,7 @@ def get_colors(
 
     image = load_image(filename)
     wallpaper = os.path.basename(filename)
-    palette, debug_palette = _get_palettes(image, alpha, beta, gamma)
+    palette, debug_palette = get_palettes(image, alpha, beta, gamma)
     background_color = debug_palette[2][0]
 
     # hex
@@ -394,78 +391,3 @@ def get_colors(
         for j in range(8):
             colors['colors'][f'color{8 * i + j}'] = rgb_to_hex(palette[i][j])
     return colors
-
-
-def _test(filename: str, alpha: float, beta: float, gamma: float) -> None:
-    from matplotlib import pyplot as plt  # type: ignore
-
-    image = load_image(filename)
-    palette, debug_palette = _get_palettes(image, alpha, beta, gamma)
-    plt.subplot(2, 1, 1)
-    plt.axis("off")
-    plt.imshow(image)
-
-    plt.subplot(2, 1, 2)
-    plt.axis("off")
-    plt.imshow(np.concatenate((debug_palette, palette)))
-    plt.show()
-
-
-def main(args) -> None:
-    colors = get_colors(args.filename, args.alpha, args.beta, args.gamma)
-    pywal.wallpaper.change(colors["wallpaper"])
-    pywal.sequences.send(colors, to_send=not args.s, vte_fix=args.vte)
-    pywal.export.every(colors)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--filename',
-        default='./resources/tulips.png',
-        help=("(default: ./resources/tuplips.png)")
-    )
-    parser.add_argument(
-        '--alpha',
-        type=float,
-        default=DEFAULT_ALPHA,
-        help=(
-            "A inverse-stddev factor for the hue of the palette, "
-            "which is of the weight of colors around the primary hue."
-        )
-    )
-    parser.add_argument(
-        '--beta',
-        type=float,
-        default=DEFAULT_BETA,
-        help=(
-            "A inverse-stddev factor "
-            "for saturation and lightness of the palette, "
-            "which is of the weight of colors around the palette hue."
-        )
-    )
-    parser.add_argument(
-        '--gamma',
-        type=float,
-        default=DEFAULT_GAMMA,
-        help=(
-            "A weight for the saturation "
-            "of background, black and bright black colors."
-        )
-    )
-    parser.add_argument(
-        '-s', action='store_true',
-        help="Skip changing colors in terminals. (Pywal option)"
-    )
-    parser.add_argument(
-        '--vte',
-        action='store_true',
-        help="Fix text-artifacts printed in VTE terminals. (Pywal option)"
-    )
-    parser.add_argument('--debug', action='store_true')
-    args = parser.parse_args()
-
-    if args.debug:
-        _test(args.filename, args.alpha, args.beta, args.gamma)
-        exit(0)
-    main(args)
