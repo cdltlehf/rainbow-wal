@@ -7,7 +7,7 @@ ANSI-16 colors (black, red, green, yellow, blue, magenta, cyan and white.)
 # Install
 
 ```bash
-python3 -m pip install <this_project>
+python3 -m pip install --user <this_project>
 ```
 
 # Usage

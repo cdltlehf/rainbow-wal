@@ -1,5 +1,6 @@
 import os
 import tempfile
+import urllib.request
 from typing import (Optional, TypeVar, TypedDict, cast, )
 
 import cv2  # type: ignore
@@ -248,11 +249,16 @@ def read_heic(filename: str):
 
 
 def load_image(filename: str) -> NDArray[Float]:
-    filename = os.path.expanduser(filename)
-    if os.path.splitext(filename)[1] == '.heic':
-        image = read_heic(filename)
-    else:
-        image = cv2.imread(filename)
+    try:
+        req = urllib.request.urlopen(filename)
+        arr = np.asarray(bytearray(req.read()), dtype=np.uint8)
+        image = cv2.imdecode(arr, -1)
+    except ValueError:
+        filename = os.path.expanduser(filename)
+        if os.path.splitext(filename)[1] == '.heic':
+            image = read_heic(filename)
+        else:
+            image = cv2.imread(filename)
     factor = np.sqrt(MAXIMUM_IMAGE_SIZE / image.size)
     if factor < 1:
         resized_image = cv2.resize(image, dsize=(0, 0), fx=factor, fy=factor)
