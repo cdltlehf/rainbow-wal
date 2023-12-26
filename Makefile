@@ -8,3 +8,7 @@ run:
 .PHONY: debug
 debug:
 	rainbow_wal --filename "$$(get_wallpaper)" --debug
+
+.PHONY: install
+install:
+	pip install --user .
