@@ -1,5 +1,6 @@
-.venv/
-__pycache__/
-resources/
 *.egg-info/
 .DS_Store
+.venv/
+__pycache__/
+build/
+resources/
