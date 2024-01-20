@@ -27,4 +27,4 @@ dependencies = [
 ]
 
 [project.scripts]
-rainbow_wal = "rainbow_wal.__main__:main"
+rainbow-wal = "rainbow_wal.__main__:main"
