@@ -5,15 +5,21 @@ import pywal  # type: ignore
 
 from . import (
     load_image, get_palettes, get_colors,
-    DEFAULT_ALPHA, DEFAULT_BETA, DEFAULT_GAMMA
+    DEFAULT_ALPHA, DEFAULT_BETA, DEFAULT_GAMMA, DEFAULT_DELTA
 )
 
 
-def _test(filename: str, alpha: float, beta: float, gamma: float) -> None:
+def _test(
+    filename: str,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    delta: float
+) -> None:
     from matplotlib import pyplot as plt  # type: ignore
 
     image = load_image(filename)
-    palette, debug_palette = get_palettes(image, alpha, beta, gamma)
+    palette, debug_palette = get_palettes(image, alpha, beta, gamma, delta)
     plt.subplot(2, 1, 1)
     plt.axis("off")
     plt.imshow(image)
@@ -55,9 +61,15 @@ def main() -> None:
         type=float,
         default=DEFAULT_GAMMA,
         help=(
-            "A weight for the saturation "
-            "of background, black and bright black colors."
+            "A weight for the saturation of background, "
+            "black and bright black colors."
         )
+    )
+    parser.add_argument(
+        '--delta',
+        type=float,
+        default=DEFAULT_DELTA,
+        help="A multiplicative factor for the lightness of the palette."
     )
     parser.add_argument(
         '-s', action='store_true',
@@ -72,10 +84,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.debug:
-        _test(args.filename, args.alpha, args.beta, args.gamma)
+        _test(args.filename, args.alpha, args.beta, args.gamma, args.delta)
         exit(0)
 
-    colors = get_colors(args.filename, args.alpha, args.beta, args.gamma)
+    colors = get_colors(
+        args.filename, args.alpha, args.beta, args.gamma, args.delta)
     pywal.wallpaper.change(colors["wallpaper"])
     pywal.sequences.send(colors, to_send=not args.s, vte_fix=args.vte)
     pywal.export.every(colors)

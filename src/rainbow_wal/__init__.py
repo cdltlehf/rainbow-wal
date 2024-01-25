@@ -15,6 +15,7 @@ from scipy.stats import vonmises  # type: ignore
 DEFAULT_ALPHA = 2.
 DEFAULT_BETA = 8.
 DEFAULT_GAMMA = 1.
+DEFAULT_DELTA = 1.2
 
 CHROMA_THRESHOLD = 2 / 256
 
@@ -220,12 +221,14 @@ def standardize_with_lightness(
 
 def standardize_chromatic_color(
     color: NDArray[Float],
-    bright: bool = False
+    delta: float,
+    bright: bool = False,
 ) -> NDArray[Float]:
     standardized_color = color.copy()
 
     n_lightness = color[2]
-    n_target_lightness = max(n_lightness, MINIMUM_LIGHTNESS_CHROMATIC_COLOR)
+    n_target_lightness = max(
+        n_lightness * delta, MINIMUM_LIGHTNESS_CHROMATIC_COLOR)
     n_target_lightness = min(
         n_target_lightness, MAXIMUM_LIGHTNESS_CHROMATIC_COLOR)
     if bright:
@@ -274,6 +277,7 @@ def get_palettes(
     alpha: float = DEFAULT_ALPHA,
     beta: float = DEFAULT_BETA,
     gamma: float = DEFAULT_GAMMA,
+    delta: float = DEFAULT_DELTA,
 ) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
     _image_hsl = [
         [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
@@ -366,8 +370,9 @@ def get_palettes(
             chromatic_color = np.array([hue, saturation, lightness])
         debug_palette[4][i] = hsl_to_rgb(chromatic_color)
 
-        chromatic_color = standardize_chromatic_color(chromatic_color)
-        bright_color = standardize_chromatic_color(chromatic_color, True)
+        chromatic_color = standardize_chromatic_color(chromatic_color, delta)
+        bright_color = (
+            standardize_chromatic_color(chromatic_color, delta, True))
 
         palette[0][i] = hsl_to_rgb(chromatic_color)
         palette[1][i] = hsl_to_rgb(bright_color)
@@ -380,11 +385,12 @@ def get_colors(
     alpha: float = DEFAULT_ALPHA,
     beta: float = DEFAULT_BETA,
     gamma: float = DEFAULT_GAMMA,
+    delta: float = DEFAULT_DELTA,
 ) -> Colors:
 
     image = load_image(filename)
     wallpaper = os.path.basename(filename)
-    palette, debug_palette = get_palettes(image, alpha, beta, gamma)
+    palette, debug_palette = get_palettes(image, alpha, beta, gamma, delta)
     background_color = debug_palette[2][0]
 
     # hex
