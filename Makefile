@@ -12,3 +12,7 @@ debug:
 .PHONY: install
 install:
 	pip install --user .
+
+.PHONY: dev
+dev:
+	pip install --user --editable .
