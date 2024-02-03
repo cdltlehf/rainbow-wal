@@ -3,11 +3,11 @@ default: run
 
 .PHONY: run
 run:
-	rainbow_wal --filename "$$(get_wallpaper)"
+	rainbow-wal "$$(get_wallpaper)"
 
 .PHONY: debug
 debug:
-	rainbow_wal --filename "$$(get_wallpaper)" --debug
+	rainbow-wal "$$(get_wallpaper)" --debug
 
 .PHONY: install
 install:

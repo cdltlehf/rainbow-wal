@@ -32,11 +32,7 @@ def _test(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--filename',
-        default='./resources/tulips.png',
-        help=("(default: ./resources/tuplips.png)")
-    )
+    parser.add_argument('filename')
     parser.add_argument(
         '--alpha',
         type=float,
