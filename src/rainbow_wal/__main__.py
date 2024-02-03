@@ -1,4 +1,5 @@
 import argparse
+import subprocess
 
 import numpy as np
 import pywal  # type: ignore
@@ -7,6 +8,16 @@ from . import (
     load_image, get_palettes, get_colors,
     DEFAULT_ALPHA, DEFAULT_BETA, DEFAULT_GAMMA, DEFAULT_DELTA
 )
+
+
+def get_wallpaper() -> str:
+    script: str = (
+        'tell app "finder" to get posix path of (get desktop picture as alias)'
+    )
+    wallpaper_path: str = subprocess.run(
+        ['/usr/bin/osascript', '-e', script], capture_output=True
+    ).stdout.decode('utf8').strip()
+    return wallpaper_path
 
 
 def _test(
@@ -32,14 +43,15 @@ def _test(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('filename')
+    parser.add_argument('filename', nargs='?')
     parser.add_argument(
         '--alpha',
         type=float,
         default=DEFAULT_ALPHA,
         help=(
             "A inverse-stddev factor for the hue of the palette, "
-            "which is of the weight of colors around the primary hue."
+            "which is of the weight of colors around the primary hue. "
+            "(default: %(default)s)"
         )
     )
     parser.add_argument(
@@ -50,6 +62,7 @@ def main() -> None:
             "A inverse-stddev factor "
             "for saturation and lightness of the palette, "
             "which is of the weight of colors around the palette hue."
+            "(default: %(default)s)"
         )
     )
     parser.add_argument(
@@ -59,13 +72,17 @@ def main() -> None:
         help=(
             "A weight for the saturation of background, "
             "black and bright black colors."
+            "(default: %(default)s)"
         )
     )
     parser.add_argument(
         '--delta',
         type=float,
         default=DEFAULT_DELTA,
-        help="A multiplicative factor for the lightness of the palette."
+        help=(
+            "A multiplicative factor for the lightness of the palette."
+            "(default: %(default)s)"
+        )
     )
     parser.add_argument(
         '-s', action='store_true',
@@ -78,6 +95,9 @@ def main() -> None:
     )
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
+
+    if args.filename is None:
+        args.filename = get_wallpaper()
 
     if args.debug:
         _test(args.filename, args.alpha, args.beta, args.gamma, args.delta)
