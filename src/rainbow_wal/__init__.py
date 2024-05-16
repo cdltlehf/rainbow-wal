@@ -222,17 +222,16 @@ def standardize_with_lightness(
 def standardize_chromatic_color(
     color: NDArray[Float],
     delta: float,
-    bright: bool = False,
+    minimum_lightness: float,
+    maximum_lightness: float,
+    bright_ratio: float,
 ) -> NDArray[Float]:
     standardized_color = color.copy()
 
     n_lightness = color[2]
-    n_target_lightness = max(
-        n_lightness * delta, MINIMUM_LIGHTNESS_CHROMATIC_COLOR)
-    n_target_lightness = min(
-        n_target_lightness, MAXIMUM_LIGHTNESS_CHROMATIC_COLOR)
-    if bright:
-        n_target_lightness = n_target_lightness * BRIGHT_RATIO
+    n_target_lightness = max(n_lightness * delta, minimum_lightness)
+    n_target_lightness = min(n_target_lightness, maximum_lightness)
+    n_target_lightness = n_target_lightness * bright_ratio
 
     standardized_color = standardize_with_lightness(color, n_target_lightness)
     return standardized_color
@@ -278,6 +277,10 @@ def get_palettes(
     beta: float = DEFAULT_BETA,
     gamma: float = DEFAULT_GAMMA,
     delta: float = DEFAULT_DELTA,
+    chroma_threshold: float = CHROMA_THRESHOLD,
+    minimum_chroma: float = MINIMUM_CHROMA_CHROMATIC_COLOR,
+    minimum_lightness: float = MINIMUM_LIGHTNESS_CHROMATIC_COLOR,
+    maximum_lightness: float = MAXIMUM_LIGHTNESS_CHROMATIC_COLOR,
 ) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
     _image_hsl = [
         [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
@@ -320,7 +323,7 @@ def get_palettes(
     n_primary_chroma = None
     if primary_color is not None:
         n_primary_chroma = get_chroma(primary_color)
-        if n_primary_chroma < CHROMA_THRESHOLD:
+        if n_primary_chroma < chroma_threshold:
             primary_color = None
     if primary_color is not None:
         debug_palette[1][0] = hsl_to_rgb(primary_color)
@@ -358,21 +361,27 @@ def get_palettes(
         hue = chromatic_color[0]
         n_chroma_chromatic_color = get_chroma(chromatic_color)
 
-        if n_chroma_chromatic_color < CHROMA_THRESHOLD:
+        if n_chroma_chromatic_color < chroma_threshold:
             chromatic_color = np.array(
                 [hue, primary_color[1], primary_color[2]])
         debug_palette[3][i] = hsl_to_rgb(chromatic_color)
 
-        if n_chroma_chromatic_color < MINIMUM_CHROMA_CHROMATIC_COLOR:
+        if n_chroma_chromatic_color < minimum_chroma:
             lightness = chromatic_color[2]
             lightness_factor = get_lighteness_factor(lightness)
-            saturation = MINIMUM_CHROMA_CHROMATIC_COLOR / lightness_factor
+            saturation = minimum_chroma / lightness_factor
             chromatic_color = np.array([hue, saturation, lightness])
         debug_palette[4][i] = hsl_to_rgb(chromatic_color)
 
-        chromatic_color = standardize_chromatic_color(chromatic_color, delta)
-        bright_color = (
-            standardize_chromatic_color(chromatic_color, delta, True))
+        chromatic_color = standardize_chromatic_color(
+            chromatic_color, delta,
+            minimum_lightness, maximum_lightness, 1.0
+        )
+        bright_color = standardize_chromatic_color(
+            chromatic_color, delta,
+            minimum_lightness, maximum_lightness,
+            BRIGHT_RATIO
+        )
 
         palette[0][i] = hsl_to_rgb(chromatic_color)
         palette[1][i] = hsl_to_rgb(bright_color)
@@ -386,11 +395,20 @@ def get_colors(
     beta: float = DEFAULT_BETA,
     gamma: float = DEFAULT_GAMMA,
     delta: float = DEFAULT_DELTA,
+    chroma_threshold: float = CHROMA_THRESHOLD,
+    minimum_chroma: float = MINIMUM_CHROMA_CHROMATIC_COLOR,
+    minimum_lightness: float = MINIMUM_LIGHTNESS_CHROMATIC_COLOR,
+    maximum_lightness: float = MAXIMUM_LIGHTNESS_CHROMATIC_COLOR,
 ) -> Colors:
 
     image = load_image(filename)
     wallpaper = os.path.basename(filename)
-    palette, debug_palette = get_palettes(image, alpha, beta, gamma, delta)
+    palette, debug_palette = get_palettes(
+        image,
+        alpha, beta, gamma, delta,
+        chroma_threshold, minimum_chroma,
+        minimum_lightness, maximum_lightness
+    )
     background_color = debug_palette[2][0]
 
     # hex
