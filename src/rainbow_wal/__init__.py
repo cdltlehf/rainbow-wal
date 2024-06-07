@@ -29,7 +29,7 @@ LIGHTNESS_BLACK = 1 / 256
 LIGHTNESS_BRIGHT_BLACK = (
     CONTRAST_RATIO_BRIGHT_BLACK * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
 
-MINIMUM_CHROMA_CHROMATIC_COLOR = 3 / 8
+MINIMUM_CHROMA_CHROMATIC_COLOR = 1 / 4
 MINIMUM_LIGHTNESS_CHROMATIC_COLOR = (
     CONTRAST_RATIO_CHROMATIC_COLOR * (LIGHTNESS_BACKGROUND + 0.05) - 0.05)
 MAXIMUM_LIGHTNESS_CHROMATIC_COLOR = 1 - MINIMUM_CHROMA_CHROMATIC_COLOR * 0.5
@@ -250,6 +250,59 @@ def read_heic(filename: str):
     return image
 
 
+def get_image_hsl_tuple(
+    image_rgb: NDArray[Float]
+) -> tuple[NDArray[Radian], NDArray[Float], NDArray[Float]]:
+    _image_hsl = [
+        [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
+        for rgbs in image_rgb
+    ]
+    image_hsl = np.array(_image_hsl, float)
+    _image_hsl_tuple = cast(
+        tuple[NDArray[Float], NDArray[Float], NDArray[Float]],
+        tuple(np.transpose(image_hsl, axes=(2, 0, 1)))
+    )
+    image_hues, image_saturations, image_lightnesses = _image_hsl_tuple
+    r_image_hues = np.radians(image_hues)
+    n_image_saturations = image_saturations / 100
+    n_image_lightnesses = image_lightnesses / 100
+    image_hsl_tuple = (r_image_hues, n_image_saturations, n_image_lightnesses)
+    return image_hsl_tuple
+
+
+def get_hue_chromatic_colors(
+    r_target_hues: NDArray[Radian],
+    n_image_chromas: NDArray[Float],
+    image_hsl_tuple: tuple[NDArray[Radian], NDArray[Float], NDArray[Float]],
+    alpha: float,
+) -> list[Radian]:
+    r_hue_chromatic_colors: list[Radian] = []
+    r_image_hues, n_image_saturations, n_image_lightnesses = image_hsl_tuple
+    for i, r_target_hue in enumerate(r_target_hues, 1):
+        r_hue_chromatic_color = get_hue_chromatic_color(
+            r_image_hues, r_target_hue, n_image_chromas, alpha=alpha)
+        r_hue_chromatic_colors.append(r_hue_chromatic_color)
+    return r_hue_chromatic_colors
+
+
+def get_base_chromatic_colors(
+    r_hue_chromatic_colors: list[Radian],
+    image_hsl_tuple: tuple[NDArray[Radian], NDArray[Float], NDArray[Float]],
+    n_image_chromas: NDArray[Float],
+    beta: float
+) -> list[Optional[NDArray[Float]]]:
+    base_chromatic_colors: list[Optional[NDArray[Float]]] = []
+    for r_hue_chromatic_color in r_hue_chromatic_colors:
+        base_chromatic_color = get_chromatic_color(
+            image_hsl_tuple,
+            n_image_chromas,
+            r_hue_chromatic_color,
+            beta=beta
+        )
+        base_chromatic_colors.append(base_chromatic_color)
+    return base_chromatic_colors
+
+
 def load_image(filename: str) -> NDArray[Float]:
     try:
         req = urllib.request.urlopen(filename)
@@ -282,22 +335,10 @@ def get_palettes(
     minimum_lightness: float = MINIMUM_LIGHTNESS_CHROMATIC_COLOR,
     maximum_lightness: float = MAXIMUM_LIGHTNESS_CHROMATIC_COLOR,
 ) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
-    _image_hsl = [
-        [rgb_to_hsluv(rgb.astype(float) / 256) for rgb in rgbs]
-        for rgbs in image_rgb
-    ]
-    # hue: 0~360, saturation: 0~100, lightness: 0~100
-    image_hsl = np.array(_image_hsl, float)
-    _image_hsl_tuple = cast(
-        tuple[NDArray[Float], NDArray[Float], NDArray[Float]],
-        tuple(np.transpose(image_hsl, axes=(2, 0, 1)))
-    )
-    image_hues, image_saturations, image_lightnesses = _image_hsl_tuple
-    r_image_hues = np.radians(image_hues)
-    n_image_saturations = image_saturations / 100
-    n_image_lightnesses = image_lightnesses / 100
+
+    image_hsl_tuple = get_image_hsl_tuple(image_rgb)
+    r_image_hues, n_image_saturations, n_image_lightnesses = image_hsl_tuple
     n_image_chromas = get_chromas(n_image_saturations, n_image_lightnesses)
-    image_hsl_tuple = (r_image_hues, n_image_saturations, n_image_lightnesses)
 
     # rgb
     palette = get_default_colors()
@@ -331,26 +372,25 @@ def get_palettes(
     background_color = hsl_to_rgb(achromatic_colors[0])
     debug_palette[2][0] = background_color
 
-    base_chromatic_colors: list[Optional[NDArray[Float]]] = []
-    if primary_color is not None:
-        # NOTE: red is at 12 deg
-        r_target_hues = np.radians(
-            np.array([0, 120, 60, 240, 300, 180]) + 12, dtype=Radian)
-        for i, r_target_hue in enumerate(r_target_hues, 1):
-            r_hue_chromatic_color = get_hue_chromatic_color(
-                r_image_hues, r_target_hue, n_image_chromas, alpha=alpha)
-            base_chromatic_color = get_chromatic_color(
-                image_hsl_tuple,
-                n_image_chromas,
-                r_hue_chromatic_color,
-                beta=beta
-            )
-            base_chromatic_colors.append(base_chromatic_color)
-            debug_palette[0][i] = hsl_to_rgb(np.array([r_target_hue, 1, 0.5]))
-            debug_palette[1][i] = hsl_to_rgb(
-                np.array([r_hue_chromatic_color, 1, 0.5]))
-            if base_chromatic_color is not None:
-                debug_palette[2][i] = hsl_to_rgb(base_chromatic_color)
+    # NOTE: red is at 12.2 deg
+    target_hues = np.array([0, 120, 60, 240, 300, 180]) + 12.2
+    # target_hues = np.array([12.2, 127.7, 85.9, 265.9, 307.7, 192.2])
+    r_target_hues = np.radians(np.array(target_hues, dtype=Radian))
+    debug_palette[0][1:-1] = np.array([
+        hsl_to_rgb(np.array([h, 1, 0.5])) for h in r_target_hues])
+
+    r_hue_chromatic_colors = get_hue_chromatic_colors(
+        r_target_hues, n_image_chromas, image_hsl_tuple, alpha)
+    debug_palette[1][1:-1] = np.array([
+        hsl_to_rgb(np.array([h, 1, 0.5])) for h in r_hue_chromatic_colors])
+
+    base_chromatic_colors = get_base_chromatic_colors(
+        r_hue_chromatic_colors, image_hsl_tuple, n_image_chromas, beta)
+    debug_palette[2][1:-1] = np.array([
+        hsl_to_rgb(base_chromatic_colors)
+        if base_chromatic_colors is not None else np.array([0, 0, 0])
+        for base_chromatic_colors in base_chromatic_colors
+    ])
 
     for i, base_chromatic_color in enumerate(base_chromatic_colors, 1):
         assert primary_color is not None
